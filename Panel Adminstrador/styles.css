@@ -104,7 +104,7 @@ textarea{resize:vertical}
 .nav-item.active{border-color:#2563eb; color:#0f172a; box-shadow:0 0 0 2px rgba(37,99,235,.12)}
 .nav-bottom{margin-top:auto; display:grid; gap:12px; justify-items:center; text-align:center}
 .logo-bottom{
-  width:96px;
+  width:135px;
   height:auto;
   display:block;
 }
@@ -245,7 +245,7 @@ textarea{resize:vertical}
 .avatar-circle{display:grid; place-items:center;}
 .avatar-circle img{border-radius:999px; object-fit:cover; border:1px solid #e5e7eb; box-shadow:var(--shadow); background:#f8fafc}
 /* Brand avatar size */
-.user-brand .avatar-circle img{width:64px; height:64px}
+.user-brand .avatar-circle img{width:105px; height:105px}
 /* Edit user modal avatar size */
 #modal-edit-user .avatar-circle{margin:0 auto 6px}
 #modal-edit-user .avatar-circle img{width:96px; height:96px}
