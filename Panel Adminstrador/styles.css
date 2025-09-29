@@ -157,10 +157,9 @@ textarea{resize:vertical}
   border:none;
   border-radius:28px;
   background:
-    radial-gradient(160px 120px at 12% 20%, rgba(37,99,235,.18), transparent 70%),
-    radial-gradient(220px 180px at 85% 10%, rgba(34,211,238,.14), transparent 65%),
-    var(--panel);
-  box-shadow:0 24px 55px rgba(15,23,42,.35);
+    radial-gradient(220px 160px at 12% 25%, rgba(37,99,235,.28), transparent 75%),
+    radial-gradient(260px 200px at 88% 8%, rgba(34,211,238,.22), transparent 70%),
+    #0e0f1200;
   backdrop-filter:blur(14px);
 }
 .modal-boot .boot-pulse{
