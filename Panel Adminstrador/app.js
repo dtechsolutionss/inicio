@@ -115,13 +115,6 @@ function setupBrandUI(){
     $brandName = document.getElementById('brand-name');
     $brandRole = document.getElementById('brand-role');
   }
-  const topLeft = document.querySelector('.topbar .left');
-  if(topLeft && !topLeft.querySelector('.logo-xs')){
-    const img = document.createElement('img');
-    img.src = './assets/logo.png'; img.alt = 'logo'; img.className = 'logo-xs';
-    const h2 = topLeft.querySelector('h2');
-    topLeft.insertBefore(img, h2 || topLeft.firstChild);
-  }
 }
 
 async function updateBrandValues(){

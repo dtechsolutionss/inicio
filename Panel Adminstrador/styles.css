@@ -77,7 +77,24 @@ textarea{resize:vertical}
 .shell.collapsed{grid-template-columns:0px 1fr}
 .shell.collapsed .sidebar{transform:translateX(-100%); width:0; padding:16px 0; pointer-events:none; overflow:hidden; border-right:none}
 .sidebar{position:sticky; top:0; height:100vh; display:flex; flex-direction:column; gap:16px; padding:16px; background:#ffffff; border-right:1px solid #e5e7eb; transition:transform .3s ease; overflow:auto}
-.brand{display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:14px; background:#ffffff}
+.sidebar .brand{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:12px;
+  padding:12px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#ffffff;
+  text-align:center;
+}
+.brand-text{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:2px;
+  text-align:center;
+}
 .brand-text strong{display:block; font:700 1.05rem "Space Grotesk"}
 .brand-text small{color:#64748b}
 .nav{display:grid; gap:6px}
@@ -85,13 +102,17 @@ textarea{resize:vertical}
 .nav-item i{width:18px; height:18px}
 .nav-item:hover{border-color:#cbd5e1}
 .nav-item.active{border-color:#2563eb; color:#0f172a; box-shadow:0 0 0 2px rgba(37,99,235,.12)}
-.nav-bottom{margin-top:auto; display:grid; gap:8px; justify-items:center; text-align:center}
+.nav-bottom{margin-top:auto; display:grid; gap:12px; justify-items:center; text-align:center}
+.logo-bottom{
+  width:96px;
+  height:auto;
+  display:block;
+}
 .tenure-sub{display:block; color:var(--muted); font-size:.85rem; margin-top:2px}
 .nav-actions{display:flex; gap:8px}
 .main{padding:16px; width:100%; min-width:0}
 .topbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px}
 .logo-sm{width:40px; height:40px; border-radius:10px; margin-right:8px; filter:drop-shadow(0 0 10px rgba(34,211,238,.35))}
-.logo-xs{width:36px; height:36px; border-radius:8px; margin-right:10px}
 .topbar .left{display:flex; align-items:center; gap:10px}
 .topbar .right{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end}
 .shell.collapsed .topbar .right .btn span{display:none}
@@ -314,7 +335,7 @@ textarea{resize:vertical}
 }
 [data-theme="dark"] .main{ color: var(--text); }
 [data-theme="dark"] .muted{ color: var(--muted); }
-[data-theme="dark"] .logo-sm, [data-theme="dark"] .logo-xs{ filter: none }
+[data-theme="dark"] .logo-sm, [data-theme="dark"] .logo-xs, [data-theme="dark"] .logo-bottom{ filter: none }
 [data-theme="dark"] .table .pill{ background: #101827; border-color:#223041; color:var(--text) }
 [data-theme="dark"] .topbar{ color: var(--text) }
 
