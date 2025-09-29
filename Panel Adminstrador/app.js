@@ -32,6 +32,69 @@ const $chips = document.querySelectorAll("#chip-categories .chip");
 const $search = document.getElementById("search-input");
 const $navItems = document.querySelectorAll(".nav-item");
 
+const CATEGORY_ALIASES = {
+  mobile_app: { base: "web", label: "Desarrollo App Móvil" },
+  desktop_app: { base: "automations", label: "Desarrollo App escritorio" }
+};
+
+const CATEGORY_LABELS = {
+  web: "Web",
+  automations: "Automatizaciones",
+  support: "Soporte",
+  maintenance: "Mantenimiento",
+  mobile_app: CATEGORY_ALIASES.mobile_app.label,
+  desktop_app: CATEGORY_ALIASES.desktop_app.label
+};
+
+function normalizeCategoryValue(value){
+  const key = (value || "").trim();
+  return CATEGORY_ALIASES[key]?.base || key;
+}
+
+function stripCategoryOverride(desc){
+  return (desc || "").replace(/\n?\[cat_override=[^\]]+\]\s*$/i, "").trimEnd();
+}
+
+function encodeCategoryOverride(desc, value){
+  const clean = stripCategoryOverride(desc);
+  if(CATEGORY_ALIASES[value]){
+    return `${clean}${clean ? "\n\n" : ""}[cat_override=${value}]`;
+  }
+  return clean;
+}
+
+function readCategoryOverride(desc){
+  const match = (desc || "").match(/\[cat_override=([a-z0-9_]+)\]/i);
+  const val = match ? match[1] : null;
+  return val && CATEGORY_ALIASES[val] ? val : null;
+}
+
+function catLabel(key){
+  return CATEGORY_LABELS[key] || key;
+}
+
+async function resolveCategoryOverrides(rows){
+  const map = {};
+  const aliasBases = new Set(Object.values(CATEGORY_ALIASES).map(v=>v.base));
+  const pending = [];
+  (rows||[]).forEach(r=>{
+    const fromRow = readCategoryOverride(r?.description || "");
+    if(fromRow){
+      map[r.id] = fromRow;
+    }else if(aliasBases.has(r.category)){ pending.push(r.id); }
+  });
+  const uniquePending = [...new Set(pending.filter(id=> !map[id]))];
+  if(!uniquePending.length) return map;
+  try{
+    const { data } = await sb.from('jobs').select('id,description').in('id', uniquePending);
+    (data||[]).forEach(job=>{
+      const override = readCategoryOverride(job?.description || "");
+      if(override) map[job.id] = override;
+    });
+  }catch(e){}
+  return map;
+}
+
 
 // Tenure helpers
 function pad2(n){ return String(Math.max(0, n)).padStart(2,'0'); }
@@ -377,14 +440,7 @@ $search.oninput = ()=>{ filter.q = $search.value.trim(); loadJobs(); };
 // ---------- Jobs grid ----------
 let currentJob = null;
 function catPill(cat){
-  return {
-    web: "Web",
-    automations: "Automatizaciones",
-    support: "Soporte",
-    maintenance: "Mantenimiento",
-    mobile_app: "Desarrollo App Móvil",
-    desktop_app: "Desarrollo App escritorio",
-  }[cat] || cat;
+  return catLabel(cat);
 }
 function statusColor(st){
   return st==="done" ? "border-color:#16a34a" : st==="on_hold" ? "border-color:#eab308" :
@@ -395,17 +451,29 @@ function statusLabel(st){
 }
 
 async function loadJobs(){
+  const requested = filter.cat;
   let q = sb.from("jobs_view").select("*").neq("status","archived");
-  if(filter.cat!=="all") q = q.eq("category", filter.cat);
+  if(requested!=="all") q = q.eq("category", normalizeCategoryValue(requested));
   if(filter.q) q = q.ilike("search_text", `%${filter.q}%`);
   const { data, error } = await q.order("created_at",{ ascending:false });
   if(error){ toast(error.message,"error"); return; }
 
-  $grid.innerHTML = (data||[]).map(j=>`
+  const overrideMap = await resolveCategoryOverrides(data);
+  const enriched = (data||[]).map(j=>{
+    const override = overrideMap[j.id];
+    return { ...j, _categoryDisplay: override || j.category };
+  });
+
+  const filteredRows = enriched.filter(j=>{
+    if(requested === "all") return true;
+    return j._categoryDisplay === requested;
+  });
+
+  $grid.innerHTML = filteredRows.map(j=>`
     <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
       <div class="row">
         <div class="title">${j.title}</div>
-        <div class="tags"><span class="pill">${catPill(j.category)}</span></div>
+        <div class="tags"><span class="pill">${catPill(j._categoryDisplay)}</span></div>
       </div>
       <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
       <div class="row">
@@ -419,16 +487,14 @@ async function loadJobs(){
   document.querySelectorAll(".job").forEach(el=>{
     el.onclick = async ()=>{
       currentJob = el.dataset.id;
-      const job = data.find(x=>x.id===currentJob);
-      document.getElementById("kanban-title").textContent = job.title;
-      // Marcar selección visual
+      const job = enriched.find(x=>x.id===currentJob);
+      if(job) document.getElementById("kanban-title").textContent = job.title;
       document.querySelectorAll('.job').forEach(n=> n.classList.remove('selected'));
       el.classList.add('selected');
       await loadKanban();
       await loadJobProgressChart();
     };
   });
-  // Restaurar selección si ya hay un trabajo activo
   if(currentJob){
     const sel = document.querySelector(`.job[data-id="${currentJob}"]`);
     if(sel) sel.classList.add('selected');
@@ -610,26 +676,29 @@ function enhanceUI(){
       if(error){ toast(error.message,'error'); return; }
       document.getElementById('edit-job-id').value = data.id;
       document.getElementById('edit-job-title').value = data.title||'';
-      document.getElementById('edit-job-category').value = data.category||'web';
+      const override = readCategoryOverride(data.description || '');
+      document.getElementById('edit-job-category').value = override || data.category || 'web';
       document.getElementById('edit-job-status').value = data.status||'in_progress';
       document.getElementById('edit-job-progress').value = Number(data.progress||0);
       document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
       document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
-      document.getElementById('edit-job-desc').value = data.description||'';
+      document.getElementById('edit-job-desc').value = stripCategoryOverride(data.description || '');
       openDialog(modalEditJob);
     };
   }
   if(btnSaveEditJob){
     btnSaveEditJob.onclick = async ()=>{
       const id = document.getElementById('edit-job-id').value;
+      const selectedCat = document.getElementById('edit-job-category').value;
+      const descValue = document.getElementById('edit-job-desc').value;
       const payload = {
         title: document.getElementById('edit-job-title').value.trim(),
-        category: document.getElementById('edit-job-category').value,
+        category: normalizeCategoryValue(selectedCat),
         status: document.getElementById('edit-job-status').value,
         progress: Number(document.getElementById('edit-job-progress').value||0),
         start_at: document.getElementById('edit-job-start').value || null,
         due_at: document.getElementById('edit-job-due').value || null,
-        description: document.getElementById('edit-job-desc').value.trim()
+        description: encodeCategoryOverride(descValue.trim(), selectedCat)
       };
       if(!payload.title){ toast('Título requerido','error'); return; }
       const { error } = await sb.from('jobs').update(payload).eq('id', id);
@@ -763,11 +832,13 @@ async function loadClientsIntoSelect(){
 
 // ---------- Jobs ----------
 document.getElementById("btn-save-job").onclick = async ()=>{
+  const selectedCat = document.getElementById("job-category").value;
+  const descriptionInput = document.getElementById("job-desc").value;
   const obj = {
     client_id: document.getElementById("job-client").value || null,
     title: document.getElementById("job-title").value.trim(),
-    category: document.getElementById("job-category").value,
-    description: document.getElementById("job-desc").value.trim(),
+    category: normalizeCategoryValue(selectedCat),
+    description: encodeCategoryOverride(descriptionInput.trim(), selectedCat),
     start_at: document.getElementById("job-start").value || null,
     due_at: document.getElementById("job-due").value || null
   };
@@ -949,9 +1020,14 @@ async function loadJobsTable(){
   const tbody = document.getElementById("jobs-tbody");
   if(!tbody) return;
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
-  const rows = (data||[]).filter(j=>{
+  const overrideMap = await resolveCategoryOverrides(data);
+  const enriched = (data||[]).map(j=>{
+    const override = overrideMap[j.id];
+    return { ...j, _categoryDisplay: override || j.category };
+  });
+  const rows = enriched.filter(j=>{
     if(!q) return true;
-    return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
+    return [j.title, j.client_name, j._categoryDisplay, j.status].join(' ').toLowerCase().includes(q);
   }).map(j=>{
     const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
     const eta = j.due_at ? dayjs(j.due_at).format('DD/MM HH:mm') : '';
@@ -959,7 +1035,7 @@ async function loadJobsTable(){
       <tr>
         <td>${j.title}</td>
         <td>${j.client_name||""}</td>
-        <td>${catPill(j.category)}</td>
+        <td>${catPill(j._categoryDisplay)}</td>
         <td><span class="pill">${statusLabel}</span></td>
         <td class="progress-cell"><div class="progress"><span style="width:${j.progress||0}%"></span></div></td>
         <td>${eta}</td>
