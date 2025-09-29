@@ -50,7 +50,6 @@ const DEFAULT_ROLE = "Tecnico";
 const ROLE_PRIORITY = { CEO:0, Administrador:1 };
 
 let canManageUsers = false;
-const usersCache = new Map();
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
@@ -1078,9 +1077,6 @@ async function loadUsersList(){
     if(!hintMsg) hintMsg = 'Solo los administradores y CEO pueden ver todos los usuarios.';
   }
 
-  usersCache.clear();
-  (records || []).forEach(u=>{ if(u && u.id) usersCache.set(u.id, u); });
-
   records = (records || []).slice().sort((a,b)=>{
     const aRole = rolePriority(a?.role);
     const bRole = rolePriority(b?.role);
@@ -1173,15 +1169,18 @@ function updateEditUserAvatarPreview(url){
 async function openEditUserModal(id){
   if(!canManageUsers){ toast('No tienes permisos para editar usuarios.','error'); return; }
   if(!id){ toast('Usuario no válido.','error'); return; }
-  let user = usersCache.get(id);
-  if(!user){
+  let user = null;
+  try{
     const { data, error } = await sb
       .from('profiles')
       .select('id,full_name,role,numero_telefono,avatar_url')
       .eq('id', id)
       .maybeSingle();
-    if(error){ toast(error.message,'error'); return; }
+    if(error) throw error;
     user = data;
+  }catch(err){
+    toast(err?.message || 'No fue posible cargar el usuario.','error');
+    return;
   }
   if(!user){ toast('Usuario no encontrado.','error'); return; }
   if($editUserId) $editUserId.value = user.id || '';
