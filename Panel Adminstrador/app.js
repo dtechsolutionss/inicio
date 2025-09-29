@@ -206,14 +206,11 @@ try{
 // ---------- App boot ----------
 async function boot(){
   const { data: { user } } = await sb.auth.getUser();
-  const back = document.getElementById('backHome');
   if(!user){
-    if(back) back.classList.remove('hidden');
     $auth.classList.remove('hidden');
     $app.classList.add('hidden');
     return;
   }
-  if(back) back.classList.add('hidden');
   const me = await getMe();
   try{ setupBrandUI(); await updateBrandValues(); }catch(e){}
   const displayName = (user.user_metadata && (user.user_metadata.full_name || user.user_metadata.name)) || me.full_name || user.email;
@@ -241,16 +238,9 @@ async function boot(){
   try{ initSidebarToggle(); }catch(e){}
 }
 
-// Intento de arranque inicial (evita que se vea el botón al tener sesión)
+// Intento de arranque inicial
 try{ boot(); }catch(e){}
 
-// Asegurar visibilidad correcta al cambiar estado de auth
-try{
-  sb.auth.onAuthStateChange((_event, session)=>{
-    const back = document.getElementById('backHome');
-    if(session){ back?.classList.add('hidden'); } else { back?.classList.remove('hidden'); }
-  });
-}catch(e){}
 
 async function ensureProfile(){
   const { data: { user } } = await sb.auth.getUser();
