@@ -562,12 +562,17 @@
   </dialog>
 
   <!-- Modal Boot/Verificando conexión -->
-  <dialog id="modal-boot" class="modal" tabindex="-1">
+  <dialog id="modal-boot" class="modal modal-boot" tabindex="-1">
     <div class="modal-content">
-      <div class="modal-head">
-        <h3>Verificando conexión</h3>
+      <div class="boot-pulse">
+        <span class="boot-ring"></span>
+        <span class="boot-ring"></span>
+        <div class="boot-core"><i data-lucide="wifi"></i></div>
       </div>
-      <p class="muted">Preparando tu experiencia segura…</p>
+      <div class="boot-copy">
+        <h3>Verificando conexión</h3>
+        <p>Sincronizando con la red segura de D TECH SOLUTIONS…</p>
+      </div>
     </div>
   </dialog>
 
