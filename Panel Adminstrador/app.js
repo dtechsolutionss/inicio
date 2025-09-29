@@ -47,6 +47,10 @@ function catLabel(key){
 
 const MANAGER_ROLES = new Set(["CEO", "Administrador"]);
 const DEFAULT_ROLE = "Tecnico";
+const ROLE_PRIORITY = { CEO:0, Administrador:1 };
+
+let canManageUsers = false;
+const usersCache = new Map();
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
@@ -734,6 +738,14 @@ function initSidebarToggle(){
 }
 // ---------- Modales ----------
 const modalNew = document.getElementById("modal-new");
+const modalEditUser = document.getElementById('modal-edit-user');
+const $editUserId = document.getElementById('edit-user-id');
+const $editUserName = document.getElementById('edit-user-name');
+const $editUserRole = document.getElementById('edit-user-role');
+const $editUserPhone = document.getElementById('edit-user-phone');
+const $editUserAvatar = document.getElementById('edit-user-avatar');
+const $editUserAvatarPreview = document.getElementById('edit-user-avatar-preview');
+const $btnSaveEditUser = document.getElementById('btn-save-edit-user');
 document.querySelectorAll("#modal-new .tab").forEach(b=>{
   b.onclick=()=>{ document.querySelectorAll("#modal-new .tab,#modal-new .form").forEach(x=>x.classList.remove("active","show"));
     b.classList.add("active"); document.getElementById(b.dataset.tab).classList.add("show"); };
@@ -741,7 +753,7 @@ document.querySelectorAll("#modal-new .tab").forEach(b=>{
 function openDialog(dlg){ if(dlg.showModal) dlg.showModal(); else dlg.setAttribute('open',''); }
 function closeDialog(dlg){ if(dlg.close) dlg.close(); else dlg.removeAttribute('open'); }
 // Cerrar con botón [data-close]
-document.querySelectorAll("#modal-new [data-close], #modal-task [data-close], #modal-profile [data-close], #modal-edit-job [data-close], #modal-edit-client [data-close], #modal-logout [data-close], #modal-boot [data-close]").forEach(b=>b.onclick=()=> closeDialog(b.closest("dialog")) );
+document.querySelectorAll("#modal-new [data-close], #modal-task [data-close], #modal-profile [data-close], #modal-edit-job [data-close], #modal-edit-client [data-close], #modal-edit-user [data-close], #modal-logout [data-close], #modal-boot [data-close]").forEach(b=>b.onclick=()=> closeDialog(b.closest("dialog")) );
 // Cerrar al hacer clic fuera del contenido del modal
 document.querySelectorAll('dialog.modal').forEach(dlg=>{
   dlg.addEventListener('click', (e)=>{
@@ -754,6 +766,34 @@ document.querySelectorAll('dialog.modal').forEach(dlg=>{
   });
 });
 document.getElementById("btn-open-new").onclick=()=>{ openDialog(modalNew); };
+if($editUserAvatar){
+  updateEditUserAvatarPreview($editUserAvatar.value || '');
+  $editUserAvatar.addEventListener('input', ()=> updateEditUserAvatarPreview($editUserAvatar.value));
+}
+if($btnSaveEditUser){
+  $btnSaveEditUser.onclick = async ()=>{
+    if(!canManageUsers){ toast('No tienes permisos para editar usuarios.','error'); return; }
+    const id = ($editUserId?.value || '').trim();
+    if(!id){ toast('Selecciona un usuario válido.','error'); return; }
+    const full_name = ($editUserName?.value || '').trim();
+    const role = ($editUserRole?.value || DEFAULT_ROLE) || DEFAULT_ROLE;
+    const numero_telefono = ($editUserPhone?.value || '').trim();
+    const avatar_url = ($editUserAvatar?.value || '').trim();
+    try{ showLoading('Actualizando usuario…','Guardando cambios'); }catch(e){}
+    const { error } = await sb.from('profiles').update({
+      full_name: full_name || null,
+      role,
+      numero_telefono: numero_telefono || null,
+      avatar_url: avatar_url || null,
+    }).eq('id', id);
+    hideLoading();
+    if(error){ toast(error.message,'error'); return; }
+    toast('Usuario actualizado','ok');
+    if(modalEditUser) closeDialog(modalEditUser);
+    await loadUsersList();
+    await updateBrandValues();
+  };
+}
 
 // ---------- Clientes ----------
 document.getElementById("btn-save-client").onclick = async ()=>{
@@ -1001,19 +1041,24 @@ async function loadJobsTable(){
 }
 
 // ---------- Usuarios (solo admin ve todos) ----------
+function rolePriority(role){
+  return ROLE_PRIORITY[role] ?? 2;
+}
+
 async function loadUsersList(){
   const tbody = document.getElementById('users-tbody');
   const hint = document.getElementById('users-hint');
   if(!tbody) return;
   const me = await getMe();
   const manager = me && isManager(me.role);
+  canManageUsers = !!manager;
   const q = (document.getElementById('users-search')?.value || '').toLowerCase();
   let records = [];
   let hintMsg = '';
   if(manager){
     const { data, error } = await sb
       .from('profiles')
-      .select('full_name,role,numero_telefono,created_at')
+      .select('id,full_name,role,numero_telefono,created_at,avatar_url')
       .order('created_at',{ascending:false});
     if(error){ tbody.innerHTML=''; if(hint) hint.textContent = error.message; return; }
     records = data || [];
@@ -1023,7 +1068,7 @@ async function loadUsersList(){
     try{
       const { data: managers, error } = await sb
         .from('profiles')
-        .select('id,full_name,role,numero_telefono,created_at')
+        .select('id,full_name,role,numero_telefono,created_at,avatar_url')
         .in('role', Array.from(MANAGER_ROLES))
         .order('created_at',{ascending:false});
       if(error) throw error;
@@ -1033,25 +1078,61 @@ async function loadUsersList(){
     if(!hintMsg) hintMsg = 'Solo los administradores y CEO pueden ver todos los usuarios.';
   }
 
+  usersCache.clear();
+  (records || []).forEach(u=>{ if(u && u.id) usersCache.set(u.id, u); });
+
   records = (records || []).slice().sort((a,b)=>{
+    const aRole = rolePriority(a?.role);
+    const bRole = rolePriority(b?.role);
+    if(aRole !== bRole) return aRole - bRole;
+    const aName = (a?.full_name || '').toLowerCase();
+    const bName = (b?.full_name || '').toLowerCase();
+    if(aName && bName && aName !== bName) return aName.localeCompare(bName);
     const aDate = a && a.created_at ? new Date(a.created_at).getTime() : 0;
     const bDate = b && b.created_at ? new Date(b.created_at).getTime() : 0;
     return bDate - aDate;
   });
 
-  const rows = records.filter(u=>{
+  const filtered = records.filter(u=>{
     if(!q) return true;
     return [u.full_name||'', u.role||'', u.numero_telefono||''].join(' ').toLowerCase().includes(q);
-  }).map(u=>`
-    <tr>
-      <td>${u.full_name||''}</td>
-      <td>${u.role||''}</td>
-      <td>${u.numero_telefono||''}</td>
-      <td>${u.created_at ? dayjs(u.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
-    </tr>
-  `).join('');
+  });
+  const rows = filtered.map(u=>{
+    const canEditRow = manager && u && u.id;
+    const actionsCell = canEditRow
+      ? `<td class="actions-cell"><button class="btn btn-ghost small" title="Editar usuario" data-edit-user="${u.id}"><i data-lucide="pencil"></i></button></td>`
+      : `<td class="actions-cell"></td>`;
+    return `
+      <tr>
+        <td>${u.full_name||''}</td>
+        <td>${u.role||''}</td>
+        <td>${u.numero_telefono||''}</td>
+        <td>${u.created_at ? dayjs(u.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
+        ${actionsCell}
+      </tr>
+    `;
+  }).join('');
   tbody.innerHTML = rows;
-  if(hint) hint.textContent = hintMsg;
+  const thActions = document.querySelector('[data-users-actions]');
+  if(thActions){ thActions.style.display = manager ? '' : 'none'; }
+  if(!manager){
+    tbody.querySelectorAll('.actions-cell').forEach(td=>{ td.style.display='none'; });
+  }else{
+    tbody.querySelectorAll('.actions-cell').forEach(td=>{ td.style.display=''; });
+  }
+  if(hint){
+    let finalHint = hintMsg;
+    if(!filtered.length){
+      finalHint = q
+        ? 'Sin coincidencias para la búsqueda actual.'
+        : (hintMsg || 'Aún no hay usuarios registrados.');
+    }else if(manager && !hintMsg){
+      finalHint = 'Haz clic en el ícono de editar para actualizar un usuario.';
+    }
+    hint.textContent = finalHint;
+  }
+  lucide.createIcons();
+  if(manager) attachUsersTableHandlers();
 }
 
 const $usersSearch = document.getElementById('users-search');
@@ -1069,6 +1150,54 @@ if($jobsSearch) $jobsSearch.oninput = ()=> loadJobsTable();
 function attachClientsTableHandlers(){
   document.querySelectorAll('[data-edit-client]').forEach(b=> b.onclick = ()=> openEditClientModal(b.dataset.editClient));
   document.querySelectorAll('[data-delete-client]').forEach(b=> b.onclick = ()=> deleteClient(b.dataset.deleteClient));
+}
+function attachUsersTableHandlers(){
+  document.querySelectorAll('[data-edit-user]').forEach(b=>{
+    b.onclick = ()=> openEditUserModal(b.dataset.editUser);
+  });
+}
+function updateEditUserAvatarPreview(url){
+  if(!$editUserAvatarPreview) return;
+  const safe = (url || '').trim();
+  if(safe){
+    $editUserAvatarPreview.onerror = ()=>{
+      $editUserAvatarPreview.onerror = null;
+      $editUserAvatarPreview.src = './assets/logo.png';
+    };
+    $editUserAvatarPreview.src = safe;
+  }else{
+    $editUserAvatarPreview.onerror = null;
+    $editUserAvatarPreview.src = './assets/logo.png';
+  }
+}
+async function openEditUserModal(id){
+  if(!canManageUsers){ toast('No tienes permisos para editar usuarios.','error'); return; }
+  if(!id){ toast('Usuario no válido.','error'); return; }
+  let user = usersCache.get(id);
+  if(!user){
+    const { data, error } = await sb
+      .from('profiles')
+      .select('id,full_name,role,numero_telefono,avatar_url')
+      .eq('id', id)
+      .maybeSingle();
+    if(error){ toast(error.message,'error'); return; }
+    user = data;
+  }
+  if(!user){ toast('Usuario no encontrado.','error'); return; }
+  if($editUserId) $editUserId.value = user.id || '';
+  if($editUserName) $editUserName.value = user.full_name || '';
+  if($editUserRole){
+    const desiredRole = user.role && Array.from($editUserRole.options).some(opt=> opt.value === user.role)
+      ? user.role
+      : DEFAULT_ROLE;
+    $editUserRole.value = desiredRole;
+  }
+  if($editUserPhone) $editUserPhone.value = user.numero_telefono || '';
+  if($editUserAvatar){
+    $editUserAvatar.value = user.avatar_url || '';
+    updateEditUserAvatarPreview(user.avatar_url || '');
+  }
+  if(modalEditUser) openDialog(modalEditUser);
 }
 async function openEditClientModal(id){
   const { data, error } = await sb.from('clients').select('*').eq('id', id).single();
