@@ -376,7 +376,16 @@ $search.oninput = ()=>{ filter.q = $search.value.trim(); loadJobs(); };
 
 // ---------- Jobs grid ----------
 let currentJob = null;
-function catPill(cat){ return {web:"Web", automations:"Automatizaciones", support:"Soporte", maintenance:"Mantenimiento"}[cat] || cat; }
+function catPill(cat){
+  return {
+    web: "Web",
+    automations: "Automatizaciones",
+    support: "Soporte",
+    maintenance: "Mantenimiento",
+    mobile_app: "Desarrollo App Móvil",
+    desktop_app: "Desarrollo App escritorio",
+  }[cat] || cat;
+}
 function statusColor(st){
   return st==="done" ? "border-color:#16a34a" : st==="on_hold" ? "border-color:#eab308" :
          st==="in_progress" ? "border-color:#38bdf8" : "border-color:#1f2937";
