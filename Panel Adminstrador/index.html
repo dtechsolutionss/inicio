@@ -62,8 +62,14 @@
         <input type="password" id="signup-password" placeholder="Mín. 8 caracteres" required>
         <label>Rol</label>
         <select id="signup-role">
+          <option value="Tecnico" selected>Tecnico</option>
+          <option value="Asesor">Asesor</option>
+          <option value="Desarrollador Frontend">Desarrollador Frontend</option>
+          <option value="Desarrollador Backend">Desarrollador Backend</option>
+          <option value="Desarrollador Full Stack">Desarrollador Full Stack</option>
+          <option value="Diseñadores UX y UI">Diseñadores UX y UI</option>
           <option value="Administrador">Administrador</option>
-          <option value="Empleado">Empleado</option>
+          <option value="CEO">CEO</option>
         </select>
         <button type="submit" class="btn btn-primary w-full">Crear cuenta</button>
       </form>
@@ -462,8 +468,14 @@
         <input id="edit-user-name" placeholder="Nombre Apellido">
         <label>Rol</label>
         <select id="edit-user-role">
+          <option value="Tecnico">Tecnico</option>
+          <option value="Asesor">Asesor</option>
+          <option value="Desarrollador Frontend">Desarrollador Frontend</option>
+          <option value="Desarrollador Backend">Desarrollador Backend</option>
+          <option value="Desarrollador Full Stack">Desarrollador Full Stack</option>
+          <option value="Diseñadores UX y UI">Diseñadores UX y UI</option>
           <option value="Administrador">Administrador</option>
-          <option value="Empleado">Empleado</option>
+          <option value="CEO">CEO</option>
         </select>
         <label>Número de teléfono</label>
         <input id="edit-user-phone" type="tel" placeholder="+57 300 000 0000">
@@ -499,7 +511,7 @@
         <input id="profile-password" type="password" placeholder="Mín. 8 caracteres">
         <label>Confirmar contraseña</label>
         <input id="profile-password2" type="password" placeholder="Repite la contraseña">
-        <div class="hint">* El rol lo gestiona un Administrador. Si no quieres cambiar la contraseña, deja los campos en blanco.</div>
+        <div class="hint">* El rol lo gestiona un Administrador o CEO. Si no quieres cambiar la contraseña, deja los campos en blanco.</div>
         <button id="btn-save-profile" class="btn btn-primary">Guardar cambios</button>
       </div>
     </div>

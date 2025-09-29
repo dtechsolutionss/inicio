@@ -32,67 +32,24 @@ const $chips = document.querySelectorAll("#chip-categories .chip");
 const $search = document.getElementById("search-input");
 const $navItems = document.querySelectorAll(".nav-item");
 
-const CATEGORY_ALIASES = {
-  mobile_app: { base: "web", label: "Desarrollo App Móvil" },
-  desktop_app: { base: "automations", label: "Desarrollo App escritorio" }
-};
-
 const CATEGORY_LABELS = {
-  web: "Web",
+  web: "Páginas web",
   automations: "Automatizaciones",
-  support: "Soporte",
-  maintenance: "Mantenimiento",
-  mobile_app: CATEGORY_ALIASES.mobile_app.label,
-  desktop_app: CATEGORY_ALIASES.desktop_app.label
+  support: "Soportes",
+  maintenance: "Mantenimientos",
+  mobile_app: "Desarrollo App Móvil",
+  desktop_app: "Desarrollo App escritorio"
 };
-
-function normalizeCategoryValue(value){
-  const key = (value || "").trim();
-  return CATEGORY_ALIASES[key]?.base || key;
-}
-
-function stripCategoryOverride(desc){
-  return (desc || "").replace(/\n?\[cat_override=[^\]]+\]\s*$/i, "").trimEnd();
-}
-
-function encodeCategoryOverride(desc, value){
-  const clean = stripCategoryOverride(desc);
-  if(CATEGORY_ALIASES[value]){
-    return `${clean}${clean ? "\n\n" : ""}[cat_override=${value}]`;
-  }
-  return clean;
-}
-
-function readCategoryOverride(desc){
-  const match = (desc || "").match(/\[cat_override=([a-z0-9_]+)\]/i);
-  const val = match ? match[1] : null;
-  return val && CATEGORY_ALIASES[val] ? val : null;
-}
 
 function catLabel(key){
   return CATEGORY_LABELS[key] || key;
 }
 
-async function resolveCategoryOverrides(rows){
-  const map = {};
-  const aliasBases = new Set(Object.values(CATEGORY_ALIASES).map(v=>v.base));
-  const pending = [];
-  (rows||[]).forEach(r=>{
-    const fromRow = readCategoryOverride(r?.description || "");
-    if(fromRow){
-      map[r.id] = fromRow;
-    }else if(aliasBases.has(r.category)){ pending.push(r.id); }
-  });
-  const uniquePending = [...new Set(pending.filter(id=> !map[id]))];
-  if(!uniquePending.length) return map;
-  try{
-    const { data } = await sb.from('jobs').select('id,description').in('id', uniquePending);
-    (data||[]).forEach(job=>{
-      const override = readCategoryOverride(job?.description || "");
-      if(override) map[job.id] = override;
-    });
-  }catch(e){}
-  return map;
+const MANAGER_ROLES = new Set(["CEO", "Administrador"]);
+const DEFAULT_ROLE = "Tecnico";
+
+function isManager(role){
+  return MANAGER_ROLES.has(role);
 }
 
 
@@ -198,7 +155,7 @@ if($forms.signup){
     const full_name = document.getElementById('signup-name').value.trim();
     const email = document.getElementById('signup-email').value.trim();
     const password = document.getElementById('signup-password').value;
-    const role = document.getElementById('signup-role').value || 'Empleado';
+    const role = document.getElementById('signup-role').value || DEFAULT_ROLE;
     const { data, error } = await sb.auth.signUp({ email, password });
     if(error){ hideLoading(); toast(error.message,'error'); return; }
     try{
@@ -278,7 +235,11 @@ async function boot(){
   try{ setupBrandUI(); await updateBrandValues(); }catch(e){}
   const displayName = (user.user_metadata && (user.user_metadata.full_name || user.user_metadata.name)) || me.full_name || user.email;
   if($userName) $userName.textContent = displayName;
-  if($role){ $role.textContent = me.role?.toUpperCase() || ''; $role.classList.toggle('admin', me.role === 'Administrador'); }
+  if($role){
+    const roleDisplay = me.role || '';
+    $role.textContent = roleDisplay;
+    $role.classList.toggle('admin', isManager(roleDisplay));
+  }
   if($tenure){
     const reg = (user && user.created_at) || (me && me.created_at);
     const t = formatTenure(reg);
@@ -311,7 +272,7 @@ async function ensureProfile(){
   const { data } = await sb.from("profiles").select("id").eq("id", user.id).maybeSingle();
   if(!data){
     const full_name = (user.user_metadata && (user.user_metadata.full_name || user.user_metadata.name)) || null;
-    await sb.from("profiles").insert({ id:user.id, full_name, role:"Empleado" });
+    await sb.from("profiles").insert({ id:user.id, full_name, role: DEFAULT_ROLE });
   }
 }
 async function getMe(){
@@ -374,10 +335,10 @@ async function loadMyUpcoming(){
 async function loadOverdue(){
   const box = document.getElementById('w-overdue'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
-  const me = await getMe(); const isAdmin = me && me.role==='Administrador';
+  const me = await getMe(); const manager = me && isManager(me.role);
   const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,assignee').neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
-  const filtered = (tasks||[]).filter(t=> isAdmin || t.assignee===me.id);
+  const filtered = (tasks||[]).filter(t=> manager || t.assignee===me.id);
   const jobIds = [...new Set(filtered.map(t=>t.job_id).filter(Boolean))];
   let jobsMap = {};
   if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,due_at').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
@@ -453,27 +414,21 @@ function statusLabel(st){
 async function loadJobs(){
   const requested = filter.cat;
   let q = sb.from("jobs_view").select("*").neq("status","archived");
-  if(requested!=="all") q = q.eq("category", normalizeCategoryValue(requested));
+  if(requested!=="all") q = q.eq("category", requested);
   if(filter.q) q = q.ilike("search_text", `%${filter.q}%`);
   const { data, error } = await q.order("created_at",{ ascending:false });
   if(error){ toast(error.message,"error"); return; }
 
-  const overrideMap = await resolveCategoryOverrides(data);
-  const enriched = (data||[]).map(j=>{
-    const override = overrideMap[j.id];
-    return { ...j, _categoryDisplay: override || j.category };
-  });
-
-  const filteredRows = enriched.filter(j=>{
+  const rows = (data||[]).filter(j=>{
     if(requested === "all") return true;
-    return j._categoryDisplay === requested;
+    return j.category === requested;
   });
 
-  $grid.innerHTML = filteredRows.map(j=>`
+  $grid.innerHTML = rows.map(j=>`
     <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
       <div class="row">
         <div class="title">${j.title}</div>
-        <div class="tags"><span class="pill">${catPill(j._categoryDisplay)}</span></div>
+        <div class="tags"><span class="pill">${catPill(j.category)}</span></div>
       </div>
       <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
       <div class="row">
@@ -487,7 +442,7 @@ async function loadJobs(){
   document.querySelectorAll(".job").forEach(el=>{
     el.onclick = async ()=>{
       currentJob = el.dataset.id;
-      const job = enriched.find(x=>x.id===currentJob);
+      const job = (data||[]).find(x=>x.id===currentJob);
       if(job) document.getElementById("kanban-title").textContent = job.title;
       document.querySelectorAll('.job').forEach(n=> n.classList.remove('selected'));
       el.classList.add('selected');
@@ -527,8 +482,8 @@ async function loadKanban(){
   let rows = data || [];
   try{
     const me = await getMe();
-    const isAdmin = me && me.role === 'Administrador';
-    if(!isAdmin){
+    const privileged = me && isManager(me.role);
+    if(!privileged){
       rows = rows.filter(t=> t.assignee && t.assignee === me.id);
     }
   }catch(e){}
@@ -676,13 +631,12 @@ function enhanceUI(){
       if(error){ toast(error.message,'error'); return; }
       document.getElementById('edit-job-id').value = data.id;
       document.getElementById('edit-job-title').value = data.title||'';
-      const override = readCategoryOverride(data.description || '');
-      document.getElementById('edit-job-category').value = override || data.category || 'web';
+      document.getElementById('edit-job-category').value = data.category || 'web';
       document.getElementById('edit-job-status').value = data.status||'in_progress';
       document.getElementById('edit-job-progress').value = Number(data.progress||0);
       document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
       document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
-      document.getElementById('edit-job-desc').value = stripCategoryOverride(data.description || '');
+      document.getElementById('edit-job-desc').value = data.description || '';
       openDialog(modalEditJob);
     };
   }
@@ -693,12 +647,12 @@ function enhanceUI(){
       const descValue = document.getElementById('edit-job-desc').value;
       const payload = {
         title: document.getElementById('edit-job-title').value.trim(),
-        category: normalizeCategoryValue(selectedCat),
+        category: selectedCat,
         status: document.getElementById('edit-job-status').value,
         progress: Number(document.getElementById('edit-job-progress').value||0),
         start_at: document.getElementById('edit-job-start').value || null,
         due_at: document.getElementById('edit-job-due').value || null,
-        description: encodeCategoryOverride(descValue.trim(), selectedCat)
+        description: descValue.trim()
       };
       if(!payload.title){ toast('Título requerido','error'); return; }
       const { error } = await sb.from('jobs').update(payload).eq('id', id);
@@ -837,12 +791,11 @@ document.getElementById("btn-save-job").onclick = async ()=>{
   const obj = {
     client_id: document.getElementById("job-client").value || null,
     title: document.getElementById("job-title").value.trim(),
-    category: normalizeCategoryValue(selectedCat),
-    description: encodeCategoryOverride(descriptionInput.trim(), selectedCat),
+    category: selectedCat,
+    description: descriptionInput.trim(),
     start_at: document.getElementById("job-start").value || null,
     due_at: document.getElementById("job-due").value || null
   };
-  if(!obj.title){ toast("Título requerido","error"); return; }
   if(!obj.title){ toast("Título requerido","error"); return; }
   const { error } = await sb.from("jobs").insert(obj);
   if(error){ toast(error.message,"error"); return; }
@@ -870,30 +823,38 @@ async function loadUsersIntoSelect(){
   if(!sel) return;
   let me = null;
   try{ me = await getMe(); }catch(e){}
-  const isAdmin = me && me.role === 'Administrador';
+  const manager = me && isManager(me.role);
   let users = [];
   try{
-    // Primer intento: según rol
-    let q = sb.from("profiles").select("id,full_name,role").order("full_name");
-    if(isAdmin){ q = q.in("role", ["Empleado","Administrador"]); }
-    else { q = q.eq("role","Empleado"); }
-    let { data, error } = await q;
-    if(error) throw error;
-    users = data || [];
-    // Fallback si viene vacío: relajamos filtro
-    if(!users.length){
-      const res = await sb.from("profiles").select("id,full_name,role").order("full_name");
-      users = (res.data || []).filter(u=> isAdmin ? true : (u.role !== 'Administrador'));
+    if(manager){
+      const { data, error } = await sb.from("profiles").select("id,full_name,role").order("full_name");
+      if(error) throw error;
+      users = data || [];
+    }else{
+      const managerRoles = Array.from(MANAGER_ROLES);
+      const list = [];
+      if(me) list.push(me);
+      const { data: admins, error } = await sb.from("profiles")
+        .select("id,full_name,role")
+        .in("role", managerRoles)
+        .order("full_name");
+      if(error) throw error;
+      (admins || []).forEach(u=> list.push(u));
+      const unique = new Map();
+      list.forEach(u=>{ if(u && u.id && !unique.has(u.id)) unique.set(u.id, u); });
+      users = Array.from(unique.values()).sort((a,b)=>{
+        const nameA = a.full_name || '';
+        const nameB = b.full_name || '';
+        return nameA.localeCompare(nameB, 'es', { sensitivity:'base' });
+      });
     }
   }catch(e){ users = []; }
 
-  if(!users.length){
-    sel.innerHTML = `<option value="">— Sin asignar —</option>`;
-    return;
-  }
-  sel.innerHTML = `<option value="">— Sin asignar —</option>` + users
-    .map(u=>`<option value="${u.id}">${u.full_name || u.id} (${u.role || ''})</option>`)
-    .join("");
+  const options = [`<option value="">— Sin asignar —</option>`];
+  users.forEach(u=>{
+    options.push(`<option value="${u.id}">${u.full_name || u.id} (${u.role || ''})</option>`);
+  });
+  sel.innerHTML = options.join("");
 }
 document.getElementById("btn-save-task").onclick = async ()=>{
   const obj = {
@@ -903,7 +864,6 @@ document.getElementById("btn-save-task").onclick = async ()=>{
     status: document.getElementById("task-status").value,
     progress: Number(document.getElementById("task-progress").value || 0)
   };
-  if(!obj.title){ toast("Título requerido","error"); return; }
   if(!obj.title){ toast("Título requerido","error"); return; }
   const { error } = await sb.from("tasks").insert(obj);
   if(error){ toast(error.message,"error"); return; }
@@ -1020,14 +980,9 @@ async function loadJobsTable(){
   const tbody = document.getElementById("jobs-tbody");
   if(!tbody) return;
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
-  const overrideMap = await resolveCategoryOverrides(data);
-  const enriched = (data||[]).map(j=>{
-    const override = overrideMap[j.id];
-    return { ...j, _categoryDisplay: override || j.category };
-  });
-  const rows = enriched.filter(j=>{
+  const rows = (data||[]).filter(j=>{
     if(!q) return true;
-    return [j.title, j.client_name, j._categoryDisplay, j.status].join(' ').toLowerCase().includes(q);
+    return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
   }).map(j=>{
     const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
     const eta = j.due_at ? dayjs(j.due_at).format('DD/MM HH:mm') : '';
@@ -1035,7 +990,7 @@ async function loadJobsTable(){
       <tr>
         <td>${j.title}</td>
         <td>${j.client_name||""}</td>
-        <td>${catPill(j._categoryDisplay)}</td>
+        <td>${catPill(j.category)}</td>
         <td><span class="pill">${statusLabel}</span></td>
         <td class="progress-cell"><div class="progress"><span style="width:${j.progress||0}%"></span></div></td>
         <td>${eta}</td>
@@ -1058,28 +1013,42 @@ async function loadUsersList(){
   const hint = document.getElementById('users-hint');
   if(!tbody) return;
   const me = await getMe();
-  const isAdmin = me && me.role === 'Administrador';
-  if(!isAdmin){
-    // Mostrar solo tu propio perfil
-    const one = me ? [me] : [];
-    tbody.innerHTML = one.map(u=>`
-      <tr>
-        <td>${u.full_name||''}</td>
-        <td>${u.role||''}</td>
-        <td>${u.numero_telefono||''}</td>
-        <td>${u.created_at ? dayjs(u.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
-      </tr>
-    `).join('');
-    if(hint) hint.textContent = 'Solo los administradores pueden ver todos los usuarios.';
-    return;
-  }
-  // Admin: listar todos
-  const { data, error } = await sb.from('profiles').select('full_name,role,numero_telefono,created_at').order('created_at',{ascending:false});
-  if(error){ tbody.innerHTML=''; if(hint) hint.textContent = error.message; return; }
+  const manager = me && isManager(me.role);
   const q = (document.getElementById('users-search')?.value || '').toLowerCase();
-  const rows = (data||[]).filter(u=>{
+  let records = [];
+  let hintMsg = '';
+  if(manager){
+    const { data, error } = await sb
+      .from('profiles')
+      .select('full_name,role,numero_telefono,created_at')
+      .order('created_at',{ascending:false});
+    if(error){ tbody.innerHTML=''; if(hint) hint.textContent = error.message; return; }
+    records = data || [];
+  }else{
+    const unique = new Map();
+    if(me && me.id){ unique.set(me.id, me); }
+    try{
+      const { data: managers, error } = await sb
+        .from('profiles')
+        .select('id,full_name,role,numero_telefono,created_at')
+        .in('role', Array.from(MANAGER_ROLES))
+        .order('created_at',{ascending:false});
+      if(error) throw error;
+      (managers || []).forEach(u=>{ if(u && u.id && !unique.has(u.id)) unique.set(u.id, u); });
+    }catch(e){ hintMsg = e.message || ''; }
+    records = Array.from(unique.values());
+    if(!hintMsg) hintMsg = 'Solo los administradores y CEO pueden ver todos los usuarios.';
+  }
+
+  records = (records || []).slice().sort((a,b)=>{
+    const aDate = a && a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bDate = b && b.created_at ? new Date(b.created_at).getTime() : 0;
+    return bDate - aDate;
+  });
+
+  const rows = records.filter(u=>{
     if(!q) return true;
-    return [u.full_name,u.role,u.numero_telefono].join(' ').toLowerCase().includes(q);
+    return [u.full_name||'', u.role||'', u.numero_telefono||''].join(' ').toLowerCase().includes(q);
   }).map(u=>`
     <tr>
       <td>${u.full_name||''}</td>
@@ -1089,7 +1058,7 @@ async function loadUsersList(){
     </tr>
   `).join('');
   tbody.innerHTML = rows;
-  if(hint) hint.textContent = '';
+  if(hint) hint.textContent = hintMsg;
 }
 
 const $usersSearch = document.getElementById('users-search');
