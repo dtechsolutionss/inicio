@@ -23,6 +23,19 @@ body{
 .ring{width:32px; height:32px; border-radius:999px; border:3px solid rgba(0,0,0,.12); border-top-color:#2563eb; animation:spin 0.9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spinner .txt strong{display:block}
+[data-theme="dark"] .overlay{background:rgba(2,6,23,.68); backdrop-filter:blur(3px)}
+[data-theme="dark"] .spinner{
+  background:#0e1014;
+  border:1px solid #1f2937;
+  box-shadow:0 26px 54px rgba(2,6,23,.58);
+  color:#f8fbff;
+}
+[data-theme="dark"] .spinner .txt strong,
+[data-theme="dark"] .spinner .txt small{color:#f8fbff; text-shadow:0 0 10px rgba(37,99,235,.32)}
+[data-theme="dark"] .ring{
+  border-color:rgba(148,163,184,.18);
+  border-top-color:var(--accent);
+}
 
 /* Auth */
 .auth{display:grid; place-items:center; height:100vh; padding:24px}
@@ -159,8 +172,9 @@ textarea{resize:vertical}
   background:
     radial-gradient(220px 160px at 12% 25%, rgba(37,99,235,.28), transparent 75%),
     radial-gradient(260px 200px at 88% 8%, rgba(34,211,238,.22), transparent 70%),
-    #0e0f1200;
+    var(--panel);
   backdrop-filter:blur(14px);
+  box-shadow:0 22px 50px rgba(15,23,42,.16);
 }
 .modal-boot .boot-pulse{
   position:relative;
