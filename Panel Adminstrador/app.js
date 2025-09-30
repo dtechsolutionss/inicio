@@ -48,11 +48,78 @@ function catLabel(key){
 const MANAGER_ROLES = new Set(["CEO", "Administrador"]);
 const DEFAULT_ROLE = "Tecnico";
 const ROLE_PRIORITY = { CEO:0, Administrador:1 };
+const BOGOTA_TZ = 'America/Bogota';
 
 let canManageUsers = false;
+let supportsBlocking = true;
+let cachedBlockingError = false;
+let archivedJobsOrderColumn = null;
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
+}
+
+function formatBogotaParts(value){
+  if(!value) return null;
+  try{
+    const date = value instanceof Date ? value : new Date(value);
+    if(Number.isNaN(date.getTime())) return null;
+    const formatter = new Intl.DateTimeFormat('es-CO', {
+      timeZone: BOGOTA_TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    const map = {};
+    parts.forEach(p=>{ if(p.type !== 'literal') map[p.type] = p.value; });
+    return map;
+  }catch(e){ return null; }
+}
+
+function formatDateTimeBogota(value, includeTime = true){
+  const parts = formatBogotaParts(value);
+  if(!parts) return '';
+  const dateStr = `${parts.day}/${parts.month}/${parts.year}`;
+  if(!includeTime) return dateStr;
+  if(!parts.hour || !parts.minute) return dateStr;
+  return `${dateStr} ${parts.hour}:${parts.minute}`;
+}
+
+function getBogotaDateKey(value){
+  const parts = formatBogotaParts(value);
+  if(!parts) return '';
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatForDateInput(date){
+  if(!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const y = date.getFullYear();
+  const m = String(date.getMonth()+1).padStart(2,'0');
+  const d = String(date.getDate()).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
+
+function formatForTimeInput(date){
+  if(!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const hh = String(date.getHours()).padStart(2,'0');
+  const mm = String(date.getMinutes()).padStart(2,'0');
+  return `${hh}:${mm}`;
+}
+
+function getTaskGlobalReferenceDate(){
+  const date = ($taskGlobalDate?.value || '').trim();
+  const time = ($taskGlobalTime?.value || '').trim();
+  if(!date){
+    return new Date();
+  }
+  const iso = `${date}T${time || '00:00'}-05:00`;
+  const parsed = new Date(iso);
+  if(Number.isNaN(parsed.getTime())) return new Date();
+  return parsed;
 }
 
 
@@ -100,6 +167,9 @@ const $taskModalTitle = document.getElementById('task-modal-title');
 const $taskJob = document.getElementById('task-job');
 const $taskJobWrap = document.getElementById('task-job-wrap');
 const $taskGlobalFilter = document.getElementById('task-global-filter');
+const $taskGlobalDate = document.getElementById('task-global-date');
+const $taskGlobalTime = document.getElementById('task-global-time');
+const $taskGlobalDateDisplay = document.getElementById('task-global-date-display');
 const $taskGlobalList = document.getElementById('task-global-list');
 const $btnCompleteTask = document.getElementById('btn-complete-task');
 
@@ -329,7 +399,10 @@ async function loadMyUpcoming(){
   if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,title,due_at').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
   const rows = (tasks||[]).map(t=>({ t, j: jobsMap[t.job_id] })).filter(x=>x.j && x.j.due_at).sort((a,b)=> new Date(a.j.due_at)-new Date(b.j.due_at)).slice(0,6);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin próximas entregas</li>'; return; }
-  box.innerHTML = rows.map(({t,j})=>`<li><span>${t.title}</span><span class="meta">Entrega ${dayjs(j.due_at).format('DD/MM HH:mm')}</span></li>`).join('');
+  box.innerHTML = rows.map(({t,j})=>{
+    const due = formatDateTimeBogota(j.due_at);
+    return `<li><span>${t.title}</span><span class="meta">Entrega ${due}</span></li>`;
+  }).join('');
 }
 
 async function loadOverdue(){
@@ -345,7 +418,10 @@ async function loadOverdue(){
   const now = new Date();
   const rows = filtered.map(t=>({ t, j:jobsMap[t.job_id] })).filter(x=>x.j && x.j.due_at && new Date(x.j.due_at) < now).sort((a,b)=> new Date(a.j.due_at)-new Date(b.j.due_at)).slice(0,6);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin vencidas</li>'; return; }
-  box.innerHTML = rows.map(({t,j})=>`<li><span>${t.title}</span><span class="meta">Venció ${dayjs(j.due_at).format('DD/MM HH:mm')}</span></li>`).join('');
+  box.innerHTML = rows.map(({t,j})=>{
+    const due = formatDateTimeBogota(j.due_at);
+    return `<li><span>${t.title}</span><span class="meta">Venció ${due}</span></li>`;
+  }).join('');
 }
 
 async function loadWorkload(){
@@ -372,12 +448,17 @@ async function loadWorkload(){
 
 async function loadTaskGlobalList(mode = 'upcoming'){
   if(!$taskGlobalList) return;
+  const reference = getTaskGlobalReferenceDate();
+  if($taskGlobalDateDisplay){
+    const label = formatDateTimeBogota(reference) || '--';
+    $taskGlobalDateDisplay.textContent = `Fecha seleccionada: ${label}`;
+  }
   $taskGlobalList.innerHTML = '<li class="meta">Cargando…</li>';
   let me = null;
   try{ me = await getMe(); }catch(e){}
   const manager = me && isManager(me?.role);
-  const now = new Date();
-  const nowTs = now.getTime();
+  const nowTs = reference.getTime();
+  const referenceDateKey = getBogotaDateKey(reference);
   try{
     if(mode === 'recent'){
       const { data, error } = await sb.from('task_updates')
@@ -385,7 +466,7 @@ async function loadTaskGlobalList(mode = 'upcoming'){
         .order('created_at', { ascending:false })
         .limit(10);
       if(error) throw error;
-      const rows = data || [];
+      const rows = (data || []).filter(r=> getBogotaDateKey(r.created_at) === referenceDateKey);
       if(!rows.length){ $taskGlobalList.innerHTML = '<li class="meta">Sin actividad reciente.</li>'; return; }
       const tids = [...new Set(rows.map(r=> r.task_id).filter(Boolean))];
       const uids = [...new Set(rows.map(r=> r.user_id).filter(Boolean))];
@@ -402,7 +483,7 @@ async function loadTaskGlobalList(mode = 'upcoming'){
       $taskGlobalList.innerHTML = rows.map(r=>{
         const title = taskNames[r.task_id] || 'Tarea';
         const who = userNames[r.user_id] || 'Usuario';
-        const when = r.created_at ? dayjs(r.created_at).format('DD/MM HH:mm') : '';
+        const when = formatDateTimeBogota(r.created_at);
         const prog = typeof r.progress === 'number' ? ` · ${r.progress}%` : '';
         const note = r.note ? ` · ${r.note}` : '';
         return `<li class="is-recent"><span>${title}</span><span class="meta">${when} · ${who}${prog}${note}</span></li>`;
@@ -411,10 +492,10 @@ async function loadTaskGlobalList(mode = 'upcoming'){
     }
 
     if(mode === 'team'){
-      const { data: tasks, error } = await sb.from('tasks').select('assignee,status').neq('status','done');
+      const { data: tasks, error } = await sb.from('tasks').select('assignee,status,due_at').neq('status','done');
       if(error) throw error;
       const groups = {};
-      (tasks||[]).forEach(t=>{
+      (tasks||[]).filter(t=> t.due_at && getBogotaDateKey(t.due_at) === referenceDateKey).forEach(t=>{
         const key = t.assignee || 'sin';
         groups[key] = groups[key] || { total:0, doing:0, review:0, todo:0 };
         if(t.status==='doing') groups[key].doing++;
@@ -442,7 +523,7 @@ async function loadTaskGlobalList(mode = 'upcoming'){
 
     if(!me){ $taskGlobalList.innerHTML = '<li class="meta">Inicia sesión para ver tus tareas.</li>'; return; }
     const { data: tasks, error } = await sb.from('tasks')
-      .select('id,title,status,progress,assignee,job_id')
+      .select('id,title,status,progress,assignee,job_id,due_at')
       .neq('status','done');
     if(error) throw error;
     const pool = (tasks||[]).filter(t=>{
@@ -468,7 +549,7 @@ async function loadTaskGlobalList(mode = 'upcoming'){
       return;
     }
     $taskGlobalList.innerHTML = cmp.slice(0,8).map(({ t, job })=>{
-      const due = job && job.due_at ? dayjs(job.due_at).format('DD/MM HH:mm') : '';
+      const due = job && job.due_at ? formatDateTimeBogota(job.due_at) : '';
       const cls = mode === 'overdue' ? 'is-overdue' : 'is-upcoming';
       const metaLabel = mode === 'overdue' ? `Venció ${due}` : `Entrega ${due}`;
       return `<li class="${cls}"><span>${t.title || job?.title || 'Tarea'}</span><span class="meta">${metaLabel}</span></li>`;
@@ -491,7 +572,7 @@ async function loadRecentActivity(){
   if(tids.length){ const { data:tt } = await sb.from('tasks').select('id,title').in('id',tids); (tt||[]).forEach(t=> tasksMap[t.id]=t.title); }
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin actividad</li>'; return; }
   box.innerHTML = rows.map(r=>{
-    const when = dayjs(r.created_at).format('DD/MM HH:mm');
+    const when = formatDateTimeBogota(r.created_at);
     const who = names[r.user_id] || 'Usuario';
     const task = tasksMap[r.task_id] || 'Tarea';
     const prog = typeof r.progress==='number' ? ` · ${r.progress}%` : '';
@@ -541,7 +622,7 @@ async function loadJobs(){
       <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
       <div class="row">
         <small class="muted">${j.client_name||''}</small>
-        <small class="muted">${j.due_at ? "Entrega "+dayjs(j.due_at).format("DD/MM HH:mm"):""}</small>
+        <small class="muted">${j.due_at ? "Entrega "+formatDateTimeBogota(j.due_at):""}</small>
       </div>
       <div class="progress"><span style="width:${j.progress||0}%"></span></div>
     </article>
@@ -868,7 +949,7 @@ async function loadTaskUpdates(taskId){
     }
   }catch(e){}
   box.innerHTML = rows.map(r=>{
-    const when = r.created_at ? dayjs(r.created_at).format('DD/MM/YYYY HH:mm') : '';
+    const when = r.created_at ? formatDateTimeBogota(r.created_at) : '';
     const who = nameMap[r.user_id] || 'Usuario';
     const prog = (typeof r.progress === 'number') ? ` · ${r.progress}%` : '';
     const note = r.note ? `<div class="update-note">${r.note}</div>` : '';
@@ -1142,7 +1223,7 @@ async function loadClientsList(){
       <td>${c.contact_name||""}</td>
       <td>${c.contact_email ? `<i data-lucide="mail"></i> ${c.contact_email}` : ""}</td>
       <td>${c.phone ? `<i data-lucide="phone"></i> ${c.phone}` : ""}</td>
-      <td>${c.created_at ? dayjs(c.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
+      <td>${c.created_at ? formatDateTimeBogota(c.created_at) : ''}</td>
       <td>
         <button class="btn btn-ghost small" title="Editar" data-edit-client="${c.id}"><i data-lucide="pencil"></i></button>
         <button class="btn btn-ghost small" title="Eliminar" data-delete-client="${c.id}"><i data-lucide="trash-2"></i></button>
@@ -1177,7 +1258,7 @@ async function loadJobsTable(){
   });
   const rows = filtered.map(j=>{
     const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
-    const eta = j.due_at ? dayjs(j.due_at).format('DD/MM HH:mm') : '';
+    const eta = j.due_at ? formatDateTimeBogota(j.due_at) : '';
     return `
       <tr>
         <td>${j.title}</td>
@@ -1207,17 +1288,37 @@ async function loadArchivedJobsTable(){
   const hint = document.getElementById('jobs-archived-hint');
   if(!tbody) return;
   if(hint) hint.textContent = 'Cargando archivados…';
-  const { data, error } = await sb
-    .from('jobs_view')
-    .select('*')
-    .eq('status', 'archived')
-    .order('updated_at', { ascending:false });
-  if(error){
+  const baseCandidates = archivedJobsOrderColumn ? [archivedJobsOrderColumn, 'archived_at', 'created_at'] : ['archived_at', 'updated_at', 'created_at'];
+  const candidates = [...new Set(baseCandidates)];
+  let data = null;
+  let finalError = null;
+  let chosen = archivedJobsOrderColumn || null;
+  for(const col of candidates){
+    const orderCol = col;
+    try{
+      const response = await sb
+        .from('jobs_view')
+        .select('*')
+        .eq('status', 'archived')
+        .order(orderCol, { ascending:false });
+      if(response.error){
+        finalError = response.error;
+        continue;
+      }
+      data = response.data || [];
+      chosen = orderCol;
+      break;
+    }catch(err){
+      finalError = err;
+    }
+  }
+  if(!data){
     tbody.innerHTML = '';
-    if(hint) hint.textContent = error.message;
-    toast(error.message, 'error');
+    if(hint) hint.textContent = finalError?.message || 'No fue posible cargar los trabajos archivados.';
+    toast(finalError?.message || 'No fue posible cargar los trabajos archivados.', 'error');
     return;
   }
+  archivedJobsOrderColumn = chosen || archivedJobsOrderColumn;
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
   const filtered = (data||[]).filter(j=>{
     if(!q) return true;
@@ -1225,7 +1326,7 @@ async function loadArchivedJobsTable(){
   });
   const rows = filtered.map(j=>{
     const archivedAt = j.archived_at || j.updated_at || j.created_at;
-    const when = archivedAt ? dayjs(archivedAt).format('DD/MM/YYYY HH:mm') : '';
+    const when = archivedAt ? formatDateTimeBogota(archivedAt) : '';
     return `
       <tr>
         <td>${j.title}</td>
@@ -1257,21 +1358,26 @@ async function loadUsersList(){
   const q = (document.getElementById('users-search')?.value || '').toLowerCase();
   let records = [];
   let hintMsg = '';
+  const cols = supportsBlocking
+    ? 'id,full_name,role,numero_telefono,created_at,avatar_url,is_blocked,blocked_at'
+    : 'id,full_name,role,numero_telefono,created_at,avatar_url';
   try{
     if(manager){
       let query = sb
         .from('profiles')
-        .select('id,full_name,role,numero_telefono,created_at,avatar_url,is_blocked,blocked_at')
+        .select(cols)
         .order('created_at',{ascending:false});
       if(me && me.role === 'Administrador') query = query.neq('role','CEO');
       const { data, error } = await query;
       if(error) throw error;
       records = data || [];
-      hintMsg = 'Puedes editar, bloquear o eliminar desde las acciones.';
+      hintMsg = supportsBlocking
+        ? 'Puedes editar, bloquear o eliminar desde las acciones.'
+        : 'Puedes editar o eliminar desde las acciones.';
     }else{
       const { data, error } = await sb
         .from('profiles')
-        .select('id,full_name,role,numero_telefono,created_at,avatar_url,is_blocked,blocked_at')
+        .select(cols)
         .neq('role','CEO')
         .neq('role','Administrador')
         .order('created_at',{ascending:false});
@@ -1280,6 +1386,12 @@ async function loadUsersList(){
       hintMsg = 'Solo ves a los empleados operativos.';
     }
   }catch(err){
+    if(supportsBlocking && !cachedBlockingError && err?.message && err.message.toLowerCase().includes('is_blocked')){
+      supportsBlocking = false;
+      cachedBlockingError = true;
+      await loadUsersList();
+      return;
+    }
     tbody.innerHTML = '';
     if(hint) hint.textContent = err?.message || 'No fue posible cargar los empleados.';
     return;
@@ -1317,7 +1429,7 @@ async function loadUsersList(){
     const blockAction = u.is_blocked ? 'unblock' : 'block';
     const blockIcon = u.is_blocked ? 'user-check' : 'user-x';
     const blockTitle = u.is_blocked ? 'Desbloquear empleado' : 'Bloquear empleado';
-    const blockBtn = (manageable && !isSelf)
+    const blockBtn = (supportsBlocking && manageable && !isSelf)
       ? `<button class="btn btn-ghost small" title="${blockTitle}" data-block-user="${u.id}" data-block-action="${blockAction}"><i data-lucide="${blockIcon}"></i></button>`
       : '';
     const deleteBtn = (manageable && !isSelf)
@@ -1329,7 +1441,7 @@ async function loadUsersList(){
         <td>${u.full_name||''}${blockedTag}</td>
         <td>${u.role||''}</td>
         <td>${u.numero_telefono||''}</td>
-        <td>${u.created_at ? dayjs(u.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
+        <td>${u.created_at ? formatDateTimeBogota(u.created_at) : ''}</td>
         <td class="actions-cell">${actions}</td>
       </tr>
     `;
@@ -1349,7 +1461,9 @@ async function loadUsersList(){
         ? 'Sin coincidencias para la búsqueda actual.'
         : (hintMsg || 'Aún no hay empleados registrados.');
     }else if(manager){
-      finalHint = 'Gestiona desde la columna de acciones.';
+      finalHint = supportsBlocking
+        ? 'Gestiona (editar/bloquear/eliminar) desde la columna de acciones.'
+        : 'Gestiona (editar/eliminar) desde la columna de acciones.';
     }
     hint.textContent = finalHint;
   }
@@ -1361,7 +1475,20 @@ const $usersSearch = document.getElementById('users-search');
 if($usersSearch) $usersSearch.oninput = ()=> loadUsersList();
 const $btnRefUsers = document.getElementById('btn-refresh-users');
 if($btnRefUsers) $btnRefUsers.onclick = ()=> loadUsersList();
-if($taskGlobalFilter) $taskGlobalFilter.onchange = ()=> loadTaskGlobalList($taskGlobalFilter.value);
+function initTaskGlobalControls(){
+  const now = new Date();
+  if($taskGlobalDate && !$taskGlobalDate.value){
+    $taskGlobalDate.value = formatForDateInput(now);
+  }
+  if($taskGlobalTime && !$taskGlobalTime.value){
+    $taskGlobalTime.value = formatForTimeInput(now);
+  }
+  const handler = ()=> loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+  if($taskGlobalDate) $taskGlobalDate.onchange = handler;
+  if($taskGlobalTime) $taskGlobalTime.onchange = handler;
+  if($taskGlobalFilter) $taskGlobalFilter.onchange = handler;
+}
+try{ initTaskGlobalControls(); }catch(e){}
 
 // Buscadores
 const $clientsSearch = document.getElementById('clients-search');
@@ -1378,15 +1505,18 @@ function attachUsersTableHandlers(){
   document.querySelectorAll('[data-edit-user]').forEach(b=>{
     b.onclick = ()=> openEditUserModal(b.dataset.editUser);
   });
-  document.querySelectorAll('[data-block-user]').forEach(b=>{
-    b.onclick = ()=> toggleUserBlock(b.dataset.blockUser, b.dataset.blockAction);
-  });
+  if(supportsBlocking){
+    document.querySelectorAll('[data-block-user]').forEach(b=>{
+      b.onclick = ()=> toggleUserBlock(b.dataset.blockUser, b.dataset.blockAction);
+    });
+  }
   document.querySelectorAll('[data-delete-user]').forEach(b=>{
     b.onclick = ()=> deleteUser(b.dataset.deleteUser);
   });
 }
 
 async function toggleUserBlock(id, action){
+  if(!supportsBlocking){ toast('El bloqueo de empleados no está disponible en este momento.','error'); return; }
   if(!canManageUsers){ toast('No tienes permisos para gestionar empleados.','error'); return; }
   if(!id){ toast('Empleado no válido.','error'); return; }
   const block = action === 'block';

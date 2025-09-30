@@ -219,14 +219,21 @@
           </section>
 
           <section class="card status-card">
-            <div class="card-header">
-              <h3>Resumen por fecha</h3>
-              <select id="task-global-filter">
-                <option value="upcoming">Mis próximas cargas</option>
-                <option value="overdue">Tareas vencidas</option>
-                <option value="recent">Actividades recientes</option>
-                <option value="team">Carga del equipo</option>
-              </select>
+            <div class="card-header task-global-header">
+              <div class="task-global-title">
+                <h3>Resumen por fecha</h3>
+                <small id="task-global-date-display" class="muted">Fecha seleccionada: --</small>
+              </div>
+              <div class="task-global-controls">
+                <input type="date" id="task-global-date" aria-label="Seleccionar fecha">
+                <input type="time" id="task-global-time" step="60" aria-label="Seleccionar hora">
+                <select id="task-global-filter" aria-label="Seleccionar vista">
+                  <option value="upcoming">Mis próximas cargas</option>
+                  <option value="overdue">Tareas vencidas</option>
+                  <option value="recent">Actividades recientes</option>
+                  <option value="team">Carga del equipo</option>
+                </select>
+              </div>
             </div>
             <ul id="task-global-list" class="list status-list"></ul>
           </section>
