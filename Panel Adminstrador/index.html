@@ -97,7 +97,7 @@
             <i data-lucide="users"></i><span>Clientes</span>
           </button>
           <button class="nav-item" data-view="users">
-            <i data-lucide="user-square-2"></i><span>Usuarios</span>
+            <i data-lucide="user-square-2"></i><span>Empleados</span>
           </button>
           <button class="nav-item" data-view="jobs">
             <i data-lucide="briefcase"></i><span>Trabajos</span>
@@ -218,6 +218,19 @@
             </div>
           </section>
 
+          <section class="card status-card">
+            <div class="card-header">
+              <h3>Resumen por fecha</h3>
+              <select id="task-global-filter">
+                <option value="upcoming">Mis próximas cargas</option>
+                <option value="overdue">Tareas vencidas</option>
+                <option value="recent">Actividades recientes</option>
+                <option value="team">Carga del equipo</option>
+              </select>
+            </div>
+            <ul id="task-global-list" class="list status-list"></ul>
+          </section>
+
           <!-- Widgets secundarios debajo de Selección de trabajo y Avances -->
           <section class="grid" id="widgets">
             <div class="card">
@@ -269,13 +282,13 @@
           </div>
         </section>
 
-        <!-- View: Usuarios -->
+        <!-- View: Empleados -->
         <section id="view-users" class="view">
           <div class="card">
             <div class="card-header">
-              <h3><i data-lucide="user-square-2"></i> Usuarios</h3>
+              <h3><i data-lucide="user-square-2"></i> Empleados</h3>
               <div class="actions">
-                <div class="search"><input id="users-search" placeholder="Buscar usuario..."></div>
+                <div class="search"><input id="users-search" placeholder="Buscar empleado..."></div>
                 <button id="btn-refresh-users" class="btn btn-ghost small">
                   <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
                 </button>
@@ -327,6 +340,30 @@
                 <tbody id="jobs-tbody"></tbody>
               </table>
             </div>
+            <div id="jobs-hint" class="muted"></div>
+          </div>
+
+          <div class="card archived-card">
+            <div class="card-header">
+              <h3><i data-lucide="archive"></i> Trabajos archivados</h3>
+              <button id="btn-refresh-archived-jobs" class="btn btn-ghost small">
+                <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
+              </button>
+            </div>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Título</th>
+                    <th>Cliente</th>
+                    <th>Categoría</th>
+                    <th>Archivado</th>
+                  </tr>
+                </thead>
+                <tbody id="jobs-archived-tbody"></tbody>
+              </table>
+            </div>
+            <div id="jobs-archived-hint" class="muted"></div>
           </div>
         </section>
       </main>
@@ -420,6 +457,7 @@
         <textarea id="task-note" rows="2" placeholder="Qué hiciste o siguiente paso?"></textarea>
         <div>
           <button id="btn-save-task" class="btn btn-primary">Guardar</button>
+          <button id="btn-complete-task" class="btn btn-ghost">Marcar como cumplida</button>
           <button id="btn-delete-task" class="btn btn-ghost">Eliminar</button>
         </div>
         <div class="updates">

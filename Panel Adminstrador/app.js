@@ -79,7 +79,7 @@ function showView(name){
   $navItems.forEach(n=> n.classList.toggle('active', n.dataset.view===name));
   lucide.createIcons();
   if(name==='clients') loadClientsList();
-  if(name==='jobs') loadJobsTable();
+  if(name==='jobs'){ loadJobsTable(); loadArchivedJobsTable(); }
   if(name==='users') loadUsersList();
 }
 $navItems.forEach(n=> n.onclick = ()=> showView(n.dataset.view));
@@ -99,6 +99,9 @@ const $taskProgress = document.getElementById('task-progress');
 const $taskModalTitle = document.getElementById('task-modal-title');
 const $taskJob = document.getElementById('task-job');
 const $taskJobWrap = document.getElementById('task-job-wrap');
+const $taskGlobalFilter = document.getElementById('task-global-filter');
+const $taskGlobalList = document.getElementById('task-global-list');
+const $btnCompleteTask = document.getElementById('btn-complete-task');
 
 // Sidebar brand (will be initialized on boot)
 let $brandAvatar = null, $brandName = null, $brandRole = null;
@@ -250,6 +253,7 @@ async function boot(){
   await loadJobs();
   await updateStats();
   try{ await loadWidgets(); }catch(e){}
+  try{ await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming'); }catch(e){}
   initKanbanDnD();
   buildChart([]);
   // set default view
@@ -366,6 +370,114 @@ async function loadWorkload(){
   box.innerHTML = rows.map(r=>`<li><span>${r.name}</span><span class="meta">En curso ${r.doing} · En revisión ${r.review} · Total ${r.total}</span></li>`).join('');
 }
 
+async function loadTaskGlobalList(mode = 'upcoming'){
+  if(!$taskGlobalList) return;
+  $taskGlobalList.innerHTML = '<li class="meta">Cargando…</li>';
+  let me = null;
+  try{ me = await getMe(); }catch(e){}
+  const manager = me && isManager(me?.role);
+  const now = new Date();
+  const nowTs = now.getTime();
+  try{
+    if(mode === 'recent'){
+      const { data, error } = await sb.from('task_updates')
+        .select('task_id,user_id,progress,note,created_at')
+        .order('created_at', { ascending:false })
+        .limit(10);
+      if(error) throw error;
+      const rows = data || [];
+      if(!rows.length){ $taskGlobalList.innerHTML = '<li class="meta">Sin actividad reciente.</li>'; return; }
+      const tids = [...new Set(rows.map(r=> r.task_id).filter(Boolean))];
+      const uids = [...new Set(rows.map(r=> r.user_id).filter(Boolean))];
+      const taskNames = {};
+      const userNames = {};
+      if(tids.length){
+        const { data: tasks } = await sb.from('tasks').select('id,title').in('id', tids);
+        (tasks||[]).forEach(t=>{ if(t && t.id) taskNames[t.id] = t.title; });
+      }
+      if(uids.length){
+        const { data: ppl } = await sb.from('profiles').select('id,full_name').in('id', uids);
+        (ppl||[]).forEach(p=>{ if(p && p.id) userNames[p.id] = p.full_name; });
+      }
+      $taskGlobalList.innerHTML = rows.map(r=>{
+        const title = taskNames[r.task_id] || 'Tarea';
+        const who = userNames[r.user_id] || 'Usuario';
+        const when = r.created_at ? dayjs(r.created_at).format('DD/MM HH:mm') : '';
+        const prog = typeof r.progress === 'number' ? ` · ${r.progress}%` : '';
+        const note = r.note ? ` · ${r.note}` : '';
+        return `<li class="is-recent"><span>${title}</span><span class="meta">${when} · ${who}${prog}${note}</span></li>`;
+      }).join('');
+      return;
+    }
+
+    if(mode === 'team'){
+      const { data: tasks, error } = await sb.from('tasks').select('assignee,status').neq('status','done');
+      if(error) throw error;
+      const groups = {};
+      (tasks||[]).forEach(t=>{
+        const key = t.assignee || 'sin';
+        groups[key] = groups[key] || { total:0, doing:0, review:0, todo:0 };
+        if(t.status==='doing') groups[key].doing++;
+        else if(t.status==='review') groups[key].review++;
+        else if(t.status==='todo') groups[key].todo++;
+        groups[key].total++;
+      });
+      const ids = Object.keys(groups).filter(k=> k !== 'sin' && k);
+      const names = { sin: 'Sin asignar' };
+      if(ids.length){
+        const { data: ppl } = await sb.from('profiles').select('id,full_name').in('id', ids);
+        (ppl||[]).forEach(p=>{ if(p && p.id) names[p.id] = p.full_name || p.id; });
+      }
+      const rows = Object.entries(groups).map(([id, stats])=>({
+        id,
+        name: names[id] || (id==='sin' ? 'Sin asignar' : 'Usuario'),
+        ...stats
+      })).sort((a,b)=> b.total - a.total).slice(0,8);
+      if(!rows.length){ $taskGlobalList.innerHTML = '<li class="meta">Sin tareas activas.</li>'; return; }
+      $taskGlobalList.innerHTML = rows.map(r=>`
+        <li class="is-team"><span>${r.name}</span><span class="meta">Total ${r.total} · En curso ${r.doing} · Revisión ${r.review}</span></li>
+      `).join('');
+      return;
+    }
+
+    if(!me){ $taskGlobalList.innerHTML = '<li class="meta">Inicia sesión para ver tus tareas.</li>'; return; }
+    const { data: tasks, error } = await sb.from('tasks')
+      .select('id,title,status,progress,assignee,job_id')
+      .neq('status','done');
+    if(error) throw error;
+    const pool = (tasks||[]).filter(t=>{
+      if(mode === 'upcoming') return t.assignee === (me && me.id);
+      if(manager) return true;
+      return t.assignee === (me && me.id);
+    });
+    const jobIds = [...new Set(pool.map(t=> t.job_id).filter(Boolean))];
+    const jobsMap = {};
+    if(jobIds.length){
+      const { data: jobs } = await sb.from('jobs').select('id,title,due_at').in('id', jobIds);
+      (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
+    }
+    const annotated = pool.map(t=>({ t, job: jobsMap[t.job_id] })).filter(x=> x.job && x.job.due_at);
+    const cmp = mode === 'overdue'
+      ? annotated.filter(x=> new Date(x.job.due_at).getTime() < nowTs)
+      : annotated.filter(x=> new Date(x.job.due_at).getTime() >= nowTs);
+    cmp.sort((a,b)=> new Date(a.job.due_at) - new Date(b.job.due_at));
+    if(!cmp.length){
+      $taskGlobalList.innerHTML = mode === 'overdue'
+        ? '<li class="meta">Sin tareas vencidas.</li>'
+        : '<li class="meta">Sin próximas cargas.</li>';
+      return;
+    }
+    $taskGlobalList.innerHTML = cmp.slice(0,8).map(({ t, job })=>{
+      const due = job && job.due_at ? dayjs(job.due_at).format('DD/MM HH:mm') : '';
+      const cls = mode === 'overdue' ? 'is-overdue' : 'is-upcoming';
+      const metaLabel = mode === 'overdue' ? `Venció ${due}` : `Entrega ${due}`;
+      return `<li class="${cls}"><span>${t.title || job?.title || 'Tarea'}</span><span class="meta">${metaLabel}</span></li>`;
+    }).join('');
+  }catch(err){
+    $taskGlobalList.innerHTML = `<li class="meta">${err?.message || 'No fue posible cargar la información.'}</li>`;
+  }
+}
+
 async function loadRecentActivity(){
   const box = document.getElementById('w-activity'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
@@ -465,6 +577,8 @@ function initKanbanDnD(){
         const { error } = await sb.from("tasks").update({ status:newStatus }).eq("id", id);
         if(error){ toast("No se pudo mover la tarea: "+error.message,"error"); await loadKanban(); return; }
         await loadKanban(); await loadJobs(); await updateStats();
+        await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+        await loadWidgets();
       }
     });
   });
@@ -565,6 +679,7 @@ function enhanceUI(){
           if($taskJobWrap) $taskJobWrap.style.display = '';
         }
       }catch(e){}
+      if($btnCompleteTask){ $btnCompleteTask.style.display = 'none'; }
       openDialog(document.getElementById('modal-task'));
     };
   }
@@ -594,6 +709,8 @@ function enhanceUI(){
       }
       closeDialog(document.getElementById('modal-task'));
       await loadKanban(); await loadJobs(); await updateStats();
+      await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+      await loadWidgets();
     };
   }
   if(btnDeleteTask){
@@ -606,6 +723,33 @@ function enhanceUI(){
       toast('Tarea eliminada','ok');
       closeDialog(document.getElementById('modal-task'));
       await loadKanban(); await updateStats();
+      await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+      await loadWidgets();
+    };
+  }
+  if($btnCompleteTask){
+    $btnCompleteTask.onclick = async ()=>{
+      const id = ($taskId?.value || '').trim();
+      if(!id){ toast('Selecciona una tarea válida.','error'); return; }
+      let me = null;
+      try{ me = await getMe(); }catch(e){}
+      const manager = me && isManager(me?.role);
+      let task = null;
+      try{
+        const { data, error } = await sb.from('tasks').select('assignee,status').eq('id', id).maybeSingle();
+        if(error) throw error;
+        task = data;
+      }catch(err){ toast(err?.message || 'No fue posible completar la tarea.','error'); return; }
+      if(!task){ toast('Tarea no encontrada.','error'); return; }
+      if(!manager && task.assignee !== (me && me.id)){ toast('No puedes completar esta tarea.','error'); return; }
+      const { error } = await sb.from('tasks').update({ status:'done', progress:100 }).eq('id', id);
+      if(error){ toast(error.message,'error'); return; }
+      try{ await addTaskUpdate(id, 100, 'Tarea marcada como cumplida'); }catch(e){}
+      toast('Tarea completada.','ok');
+      if(modalTask) closeDialog(modalTask);
+      await loadKanban(); await loadJobs(); await updateStats();
+      await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+      await loadWidgets();
     };
   }
 
@@ -683,6 +827,14 @@ async function openTaskEditor(taskId){
   if($taskJob){ $taskJob.value = data.job_id || currentJob || ''; }
   if($taskJobWrap) $taskJobWrap.style.display = '';
   try{ await loadTaskUpdates(taskId); }catch(e){}
+  if($btnCompleteTask){
+    let me = null;
+    try{ me = await getMe(); }catch(e){}
+    const manager = me && isManager(me?.role);
+    const canComplete = manager || (me && me.id === data.assignee);
+    $btnCompleteTask.style.display = canComplete ? '' : 'none';
+    $btnCompleteTask.disabled = !canComplete;
+  }
   openDialog(document.getElementById('modal-task'));
 }
 
@@ -1003,19 +1155,27 @@ async function loadClientsList(){
 }
 
 async function loadJobsTable(){
+  const tbody = document.getElementById("jobs-tbody");
+  const hint = document.getElementById('jobs-hint');
+  if(!tbody) return;
+  if(hint) hint.textContent = 'Cargando trabajos…';
   const { data, error } = await sb
     .from("jobs_view")
     .select("*")
     .neq("status","archived")
     .order("created_at", { ascending:false });
-  if(error){ toast(error.message, "error"); return; }
-  const tbody = document.getElementById("jobs-tbody");
-  if(!tbody) return;
+  if(error){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = error.message;
+    toast(error.message, "error");
+    return;
+  }
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
-  const rows = (data||[]).filter(j=>{
+  const filtered = (data||[]).filter(j=>{
     if(!q) return true;
     return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
-  }).map(j=>{
+  });
+  const rows = filtered.map(j=>{
     const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
     const eta = j.due_at ? dayjs(j.due_at).format('DD/MM HH:mm') : '';
     return `
@@ -1035,11 +1195,53 @@ async function loadJobsTable(){
     `;
   }).join("");
   tbody.innerHTML = rows;
+  if(hint){
+    hint.textContent = filtered.length ? 'Trabajos activos ordenados por fecha.' : 'Sin trabajos activos para mostrar.';
+  }
   lucide.createIcons();
   attachJobsTableHandlers();
 }
 
-// ---------- Usuarios (solo admin ve todos) ----------
+async function loadArchivedJobsTable(){
+  const tbody = document.getElementById('jobs-archived-tbody');
+  const hint = document.getElementById('jobs-archived-hint');
+  if(!tbody) return;
+  if(hint) hint.textContent = 'Cargando archivados…';
+  const { data, error } = await sb
+    .from('jobs_view')
+    .select('*')
+    .eq('status', 'archived')
+    .order('updated_at', { ascending:false });
+  if(error){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = error.message;
+    toast(error.message, 'error');
+    return;
+  }
+  const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
+  const filtered = (data||[]).filter(j=>{
+    if(!q) return true;
+    return [j.title, j.client_name, j.category].join(' ').toLowerCase().includes(q);
+  });
+  const rows = filtered.map(j=>{
+    const archivedAt = j.archived_at || j.updated_at || j.created_at;
+    const when = archivedAt ? dayjs(archivedAt).format('DD/MM/YYYY HH:mm') : '';
+    return `
+      <tr>
+        <td>${j.title}</td>
+        <td>${j.client_name||''}</td>
+        <td>${catPill(j.category)}</td>
+        <td>${when}</td>
+      </tr>
+    `;
+  }).join('');
+  tbody.innerHTML = rows;
+  if(hint){
+    hint.textContent = filtered.length ? 'Historial de trabajos archivados.' : 'Sin trabajos archivados.';
+  }
+}
+
+// ---------- Empleados (solo admin ve todos) ----------
 function rolePriority(role){
   return ROLE_PRIORITY[role] ?? 2;
 }
@@ -1048,42 +1250,53 @@ async function loadUsersList(){
   const tbody = document.getElementById('users-tbody');
   const hint = document.getElementById('users-hint');
   if(!tbody) return;
-  const me = await getMe();
+  let me = null;
+  try{ me = await getMe(); }catch(e){}
   const manager = me && isManager(me.role);
   canManageUsers = !!manager;
   const q = (document.getElementById('users-search')?.value || '').toLowerCase();
   let records = [];
   let hintMsg = '';
-  if(manager){
-    const { data, error } = await sb
-      .from('profiles')
-      .select('id,full_name,role,numero_telefono,created_at,avatar_url')
-      .order('created_at',{ascending:false});
-    if(error){ tbody.innerHTML=''; if(hint) hint.textContent = error.message; return; }
-    records = data || [];
-  }else{
-    const unique = new Map();
-    if(me && me.id){ unique.set(me.id, me); }
-    try{
-      const { data: managers, error } = await sb
+  try{
+    if(manager){
+      let query = sb
         .from('profiles')
-        .select('id,full_name,role,numero_telefono,created_at,avatar_url')
-        .in('role', Array.from(MANAGER_ROLES))
+        .select('id,full_name,role,numero_telefono,created_at,avatar_url,is_blocked,blocked_at')
+        .order('created_at',{ascending:false});
+      if(me && me.role === 'Administrador') query = query.neq('role','CEO');
+      const { data, error } = await query;
+      if(error) throw error;
+      records = data || [];
+      hintMsg = 'Puedes editar, bloquear o eliminar desde las acciones.';
+    }else{
+      const { data, error } = await sb
+        .from('profiles')
+        .select('id,full_name,role,numero_telefono,created_at,avatar_url,is_blocked,blocked_at')
+        .neq('role','CEO')
+        .neq('role','Administrador')
         .order('created_at',{ascending:false});
       if(error) throw error;
-      (managers || []).forEach(u=>{ if(u && u.id && !unique.has(u.id)) unique.set(u.id, u); });
-    }catch(e){ hintMsg = e.message || ''; }
-    records = Array.from(unique.values());
-    if(!hintMsg) hintMsg = 'Solo los administradores y CEO pueden ver todos los usuarios.';
+      records = data || [];
+      hintMsg = 'Solo ves a los empleados operativos.';
+    }
+  }catch(err){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = err?.message || 'No fue posible cargar los empleados.';
+    return;
   }
 
-  records = (records || []).slice().sort((a,b)=>{
+  const unique = new Map();
+  (records||[]).forEach(u=>{ if(u && u.id && !unique.has(u.id)) unique.set(u.id, u); });
+  if(me && me.id && !unique.has(me.id)) unique.set(me.id, me);
+  records = Array.from(unique.values());
+
+  records = records.slice().sort((a,b)=>{
     const aRole = rolePriority(a?.role);
     const bRole = rolePriority(b?.role);
     if(aRole !== bRole) return aRole - bRole;
     const aName = (a?.full_name || '').toLowerCase();
     const bName = (b?.full_name || '').toLowerCase();
-    if(aName && bName && aName !== bName) return aName.localeCompare(bName);
+    if(aName && bName && aName !== bName) return aName.localeCompare(bName, 'es', { sensitivity:'base' });
     const aDate = a && a.created_at ? new Date(a.created_at).getTime() : 0;
     const bDate = b && b.created_at ? new Date(b.created_at).getTime() : 0;
     return bDate - aDate;
@@ -1094,17 +1307,30 @@ async function loadUsersList(){
     return [u.full_name||'', u.role||'', u.numero_telefono||''].join(' ').toLowerCase().includes(q);
   });
   const rows = filtered.map(u=>{
-    const canEditRow = manager && u && u.id;
-    const actionsCell = canEditRow
-      ? `<td class="actions-cell"><button class="btn btn-ghost small" title="Editar usuario" data-edit-user="${u.id}"><i data-lucide="pencil"></i></button></td>`
-      : `<td class="actions-cell"></td>`;
+    const rowClass = u.is_blocked ? ' class="is-blocked"' : '';
+    const blockedTag = u.is_blocked ? '<small class="blocked-label">Bloqueado</small>' : '';
+    const isSelf = me && u && u.id === me.id;
+    const manageable = manager && u && u.id && (me?.role === 'CEO' || u.role !== 'CEO');
+    const editBtn = manageable
+      ? `<button class="btn btn-ghost small" title="Editar empleado" data-edit-user="${u.id}"><i data-lucide="pencil"></i></button>`
+      : '';
+    const blockAction = u.is_blocked ? 'unblock' : 'block';
+    const blockIcon = u.is_blocked ? 'user-check' : 'user-x';
+    const blockTitle = u.is_blocked ? 'Desbloquear empleado' : 'Bloquear empleado';
+    const blockBtn = (manageable && !isSelf)
+      ? `<button class="btn btn-ghost small" title="${blockTitle}" data-block-user="${u.id}" data-block-action="${blockAction}"><i data-lucide="${blockIcon}"></i></button>`
+      : '';
+    const deleteBtn = (manageable && !isSelf)
+      ? `<button class="btn btn-ghost small" title="Eliminar empleado" data-delete-user="${u.id}"><i data-lucide="trash-2"></i></button>`
+      : '';
+    const actions = manageable ? [editBtn, blockBtn, deleteBtn].filter(Boolean).join('') : '';
     return `
-      <tr>
-        <td>${u.full_name||''}</td>
+      <tr${rowClass}>
+        <td>${u.full_name||''}${blockedTag}</td>
         <td>${u.role||''}</td>
         <td>${u.numero_telefono||''}</td>
         <td>${u.created_at ? dayjs(u.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
-        ${actionsCell}
+        <td class="actions-cell">${actions}</td>
       </tr>
     `;
   }).join('');
@@ -1121,9 +1347,9 @@ async function loadUsersList(){
     if(!filtered.length){
       finalHint = q
         ? 'Sin coincidencias para la búsqueda actual.'
-        : (hintMsg || 'Aún no hay usuarios registrados.');
-    }else if(manager && !hintMsg){
-      finalHint = 'Haz clic en el ícono de editar para actualizar un usuario.';
+        : (hintMsg || 'Aún no hay empleados registrados.');
+    }else if(manager){
+      finalHint = 'Gestiona desde la columna de acciones.';
     }
     hint.textContent = finalHint;
   }
@@ -1135,12 +1361,13 @@ const $usersSearch = document.getElementById('users-search');
 if($usersSearch) $usersSearch.oninput = ()=> loadUsersList();
 const $btnRefUsers = document.getElementById('btn-refresh-users');
 if($btnRefUsers) $btnRefUsers.onclick = ()=> loadUsersList();
+if($taskGlobalFilter) $taskGlobalFilter.onchange = ()=> loadTaskGlobalList($taskGlobalFilter.value);
 
 // Buscadores
 const $clientsSearch = document.getElementById('clients-search');
 if($clientsSearch) $clientsSearch.oninput = ()=> loadClientsList();
 const $jobsSearch = document.getElementById('jobs-search');
-if($jobsSearch) $jobsSearch.oninput = ()=> loadJobsTable();
+if($jobsSearch) $jobsSearch.oninput = ()=>{ loadJobsTable(); loadArchivedJobsTable(); };
 
 // Handlers de acciones en tablas
 function attachClientsTableHandlers(){
@@ -1151,6 +1378,49 @@ function attachUsersTableHandlers(){
   document.querySelectorAll('[data-edit-user]').forEach(b=>{
     b.onclick = ()=> openEditUserModal(b.dataset.editUser);
   });
+  document.querySelectorAll('[data-block-user]').forEach(b=>{
+    b.onclick = ()=> toggleUserBlock(b.dataset.blockUser, b.dataset.blockAction);
+  });
+  document.querySelectorAll('[data-delete-user]').forEach(b=>{
+    b.onclick = ()=> deleteUser(b.dataset.deleteUser);
+  });
+}
+
+async function toggleUserBlock(id, action){
+  if(!canManageUsers){ toast('No tienes permisos para gestionar empleados.','error'); return; }
+  if(!id){ toast('Empleado no válido.','error'); return; }
+  const block = action === 'block';
+  try{ showLoading(block ? 'Bloqueando empleado…' : 'Reactivando empleado…'); }catch(e){}
+  let finalError = null;
+  try{
+    const payload = { is_blocked: block };
+    if(block){ payload.blocked_at = new Date().toISOString(); }
+    else { payload.blocked_at = null; }
+    let { error } = await sb.from('profiles').update(payload).eq('id', id);
+    if(error && error.message && error.message.toLowerCase().includes('blocked_at')){
+      const { error: fallback } = await sb.from('profiles').update({ is_blocked: block }).eq('id', id);
+      error = fallback;
+    }
+    if(error) finalError = error;
+  }catch(err){ finalError = err; }
+  hideLoading();
+  if(finalError){ toast(finalError.message || 'No fue posible actualizar el estado.','error'); return; }
+  toast(block ? 'Empleado bloqueado.' : 'Empleado habilitado.','ok');
+  await loadUsersList();
+  await loadUsersIntoSelect();
+}
+
+async function deleteUser(id){
+  if(!canManageUsers){ toast('No tienes permisos para gestionar empleados.','error'); return; }
+  if(!id){ toast('Empleado no válido.','error'); return; }
+  if(!confirm('¿Eliminar este empleado? Esta acción es permanente.')) return;
+  try{ showLoading('Eliminando empleado…'); }catch(e){}
+  const { error } = await sb.from('profiles').delete().eq('id', id);
+  hideLoading();
+  if(error){ toast(error.message,'error'); return; }
+  toast('Empleado eliminado.','ok');
+  await loadUsersList();
+  await loadUsersIntoSelect();
 }
 function updateEditUserAvatarPreview(url){
   if(!$editUserAvatarPreview) return;
@@ -1250,13 +1520,15 @@ async function archiveJob(id){
   const { error } = await sb.from('jobs').update({ status:'archived' }).eq('id', id);
   if(error){ toast(error.message,'error'); return; }
   toast('Trabajo archivado','ok');
-  await loadJobsTable(); await loadJobs(); await updateStats();
+  await loadJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
 }
 
 // Botones de refresco
 const $btnRefClients = document.getElementById('btn-refresh-clients');
 if($btnRefClients) $btnRefClients.onclick = ()=> loadClientsList();
 const $btnRefJobs = document.getElementById('btn-refresh-jobs');
-if($btnRefJobs) $btnRefJobs.onclick = ()=> loadJobsTable();
+if($btnRefJobs) $btnRefJobs.onclick = ()=>{ loadJobsTable(); loadArchivedJobsTable(); };
+const $btnRefArchivedJobs = document.getElementById('btn-refresh-archived-jobs');
+if($btnRefArchivedJobs) $btnRefArchivedJobs.onclick = ()=> loadArchivedJobsTable();
 const $btnRefKanban = document.getElementById('btn-refresh-kanban');
 if($btnRefKanban) $btnRefKanban.onclick = async ()=>{ await loadKanban(); await loadJobProgressChart(); };
