@@ -1,5 +1,6 @@
 ﻿const $auth = document.getElementById("auth");
 const $app  = document.getElementById("app");
+const $authBackHome = document.querySelector(".auth-floating-back");
 const $overlay = document.getElementById("overlay");
 const $ovTitle = document.getElementById("overlay-title");
 const $ovSub   = document.getElementById("overlay-sub");
@@ -257,13 +258,14 @@ if($btnLogout){ $btnLogout.onclick = async ()=>{ await sb.auth.signOut(); locati
 // Volver a Web Principal con transición usando overlay existente
 try{
   const back = document.getElementById('backHome');
-  if(back){
-    back.addEventListener('click', (e)=>{
-      e.preventDefault();
-      try{ showLoading('Volviendo a la Web Principal',''); }catch(e){}
-      setTimeout(()=>{ window.location.href = '../Web%20Principal/index.html'; }, 550);
-    });
-  }
+  const backAuth = $authBackHome;
+  const handler = (e)=>{
+    e.preventDefault();
+    try{ showLoading('Volviendo a la Web Principal',''); }catch(e){}
+    setTimeout(()=>{ window.location.href = '../Web%20Principal/index.html'; }, 550);
+  };
+  if(back){ back.addEventListener('click', handler); }
+  if(backAuth){ backAuth.addEventListener('click', handler); }
 }catch(e){}
 
 // ---------- Tema (oscuro por defecto + toggle) ----------
@@ -296,6 +298,7 @@ async function boot(){
   if(!user){
     $auth.classList.remove('hidden');
     $app.classList.add('hidden');
+    if($authBackHome) $authBackHome.classList.remove('hidden');
     return;
   }
   const me = await getMe();
@@ -313,6 +316,7 @@ async function boot(){
     $tenure.innerHTML = `Tiempo en la empresa: ${t}<div class="tenure-sub">Año-Mes-Días</div>`;
   }
   $auth.classList.add('hidden'); $app.classList.remove('hidden');
+  if($authBackHome) $authBackHome.classList.add('hidden');
   lucide.createIcons();
 
   bindProfileModal(me);

@@ -58,9 +58,23 @@ input,select,textarea{
 }
 textarea{resize:vertical}
 .hint{color:#64748b; font-size:.85rem}
-.auth-footer{margin-top:18px}
-.auth-footer .btn{justify-content:center; width:100%}
-.auth-footer .btn i{width:18px; height:18px}
+.auth-floating-back{
+  position:fixed;
+  left:24px;
+  bottom:24px;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  z-index:20;
+}
+.auth-floating-back i{width:18px; height:18px}
+
+@media (max-width:640px){
+  .auth-floating-back{
+    left:16px;
+    bottom:16px;
+  }
+}
 
 /* Buttons (normalizados) */
 .btn{display:inline-flex; align-items:center; gap:8px; height:40px; padding:0 14px; border-radius:12px; cursor:pointer; border:1px solid transparent; font-weight:600; text-decoration:none}
