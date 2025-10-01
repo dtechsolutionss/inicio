@@ -1,0 +1,718 @@
+﻿<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D TECH SOLUTIONS</title>
+  <meta name="theme-color" content="#0b0f14"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Librerías -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
+
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" type="image/png" href="./assets/D TECH SOLUTIONS.png" />
+</head>
+<body>
+
+  <!-- Overlay Loading Global -->
+  <div id="overlay" class="overlay hidden">
+    <div class="spinner">
+      <div class="ring"></div>
+      <div class="txt">
+        <strong id="overlay-title">Procesando…</strong>
+        <small id="overlay-sub">Por favor, espera</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth -->
+  <section id="auth" class="auth">
+    <div class="auth-card">
+      <img src="./assets/logo.png" alt="D TECH SOLUTIONS" class="logo">
+      <h1>D TECH SOLUTIONS</h1>
+      <p class="muted">Gestiona clientes, trabajos y tareas con tu equipo.</p>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="login">Ingresar</button>
+        <button class="tab" data-tab="signup">Crear cuenta</button>
+      </div>
+
+      <form id="form-login" class="form show">
+        <label>Email</label>
+        <input type="email" id="login-email" placeholder="tucorreo@empresa.com" required>
+        <label>Contraseña</label>
+        <input type="password" id="login-password" placeholder="••••••••" required>
+        <button type="submit" class="btn btn-primary w-full">Iniciar sesión</button>
+      </form>
+
+      <form id="form-signup" class="form">
+        <label>Nombre completo</label>
+        <input type="text" id="signup-name" placeholder="Nombre Apellido" required>
+        <label>Email</label>
+        <input type="email" id="signup-email" placeholder="tucorreo@empresa.com" required>
+        <label>Contraseña</label>
+        <input type="password" id="signup-password" placeholder="Mín. 8 caracteres" required>
+        <label>Rol</label>
+        <select id="signup-role">
+          <option value="Tecnico" selected>Tecnico</option>
+          <option value="Asesor">Asesor</option>
+          <option value="Desarrollador Frontend">Desarrollador Frontend</option>
+          <option value="Desarrollador Backend">Desarrollador Backend</option>
+          <option value="Desarrollador Full Stack">Desarrollador Full Stack</option>
+          <option value="Diseñadores UX y UI">Diseñadores UX y UI</option>
+          <option value="Administrador">Administrador</option>
+          <option value="CEO">CEO</option>
+        </select>
+        <button type="submit" class="btn btn-primary w-full">Crear cuenta</button>
+      </form>
+
+    </div>
+    <a class="btn btn-back-home auth-floating-back" href="../Web%20Principal/index.html" title="Volver a la página principal" aria-label="Volver a la página principal">
+      <i data-lucide="home"></i><span>Volver al inicio</span>
+    </a>
+  </section>
+
+  <!-- App -->
+  <div id="app" class="app hidden">
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand user-brand">
+          <div class="avatar-circle">
+            <img id="brand-avatar" alt="Avatar de usuario">
+          </div>
+          <div class="brand-text">
+            <strong id="brand-name">Usuario</strong>
+            <small id="brand-role">Cargo</small>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-view="dashboard">
+            <i data-lucide="layout-dashboard"></i><span>Dashboard</span>
+          </button>
+          <button class="nav-item" data-view="clients">
+            <i data-lucide="users"></i><span>Clientes</span>
+          </button>
+          <button class="nav-item" data-view="users">
+            <i data-lucide="user-square-2"></i><span>Empleados</span>
+          </button>
+          <button class="nav-item" data-view="jobs">
+            <i data-lucide="briefcase"></i><span>Trabajos</span>
+          </button>
+        </nav>
+        <div class="nav-bottom">
+          <img src="./assets/logo.png" alt="D TECH SOLUTIONS" class="logo-bottom">
+          <span id="user-tenure" class="badge">Tiempo en la empresa: --</span>
+          <div class="nav-actions">
+            <button id="btn-profile" class="btn btn-ghost small" title="Perfil">
+              <i data-lucide="user-cog"></i><span>Perfil</span>
+            </button>
+            <button id="btn-logout" class="btn btn-ghost small">
+              <i data-lucide="log-out"></i><span>Salir</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="left">
+            <button id="btn-toggle-sidebar" class="btn btn-ghost small" title="Ocultar/Mostrar menú">
+              <i data-lucide="panel-left"></i>
+            </button>
+            <h2>D TECH SOLUTIONS - ÁREA DE TRABAJO</h2>
+          </div>
+          <div class="right">
+            <button id="btn-toggle-theme" class="btn btn-ghost" title="Cambiar tema">
+              <i data-lucide="moon"></i><span>Tema</span>
+            </button>
+            <button id="btn-open-new" class="btn btn-primary">
+              <i data-lucide="plus"></i><span>Nuevo</span>
+            </button>
+            <a id="backHome" class="btn btn-back-home" href="../Web%20Principal/index.html" title="Volver a Web Principal" aria-label="Volver a Web Principal">
+              <i data-lucide="home"></i><span>Inicio</span>
+            </a>
+          </div>
+        </header>
+
+        <!-- View: Dashboard -->
+        <section id="view-dashboard" class="view show">
+          <section class="stats">
+            <div class="card stat">
+              <div class="stat-top"><i data-lucide="users"></i><span>Clientes</span></div>
+              <div class="stat-num" id="stat-clients">0</div>
+            </div>
+            <div class="card stat">
+              <div class="stat-top"><i data-lucide="briefcase"></i><span>Trabajos activos</span></div>
+              <div class="stat-num" id="stat-jobs">0</div>
+            </div>
+            <div class="card stat">
+              <div class="stat-top"><i data-lucide="calendar-clock"></i><span>Tareas hoy</span></div>
+              <div class="stat-num" id="stat-tasks-today">0</div>
+            </div>
+            <div class="card stat">
+              <div class="stat-top"><i data-lucide="gauge"></i><span>Avance promedio</span></div>
+              <div class="stat-num" id="stat-progress">0%</div>
+            </div>
+          </section>
+
+          <section class="filters">
+            <div class="chips" id="chip-categories">
+              <button class="chip active" data-cat="all">Todos</button>
+              <button class="chip" data-cat="web">Páginas web</button>
+              <button class="chip" data-cat="automations">Automatizaciones</button>
+              <button class="chip" data-cat="support">Soportes</button>
+              <button class="chip" data-cat="maintenance">Mantenimientos</button>
+              <button class="chip" data-cat="mobile_app">Desarrollo App Móvil</button>
+              <button class="chip" data-cat="desktop_app">Desarrollo App escritorio</button>
+            </div>
+            <div class="search">
+              <input id="search-input" type="text" placeholder="Buscar cliente o trabajo...">
+            </div>
+          </section>
+
+          <section id="jobs-grid" class="grid"></section>
+
+          <section class="bottom">
+            <div class="card">
+              <div class="card-header">
+                <h3 id="kanban-title">Selecciona un trabajo</h3>
+                <div class="actions">
+                  <button id="btn-new-task" class="btn btn-ghost small">
+                    <i data-lucide="plus"></i><span>Tarea</span>
+                  </button>
+                  <button id="btn-edit-job" class="btn btn-ghost small">
+                    <i data-lucide="pencil"></i><span>Editar</span>
+                  </button>
+                  <button id="btn-refresh-kanban" class="btn btn-ghost small" title="Actualizar">
+                    <i data-lucide="refresh-ccw"></i>
+                  </button>
+                </div>
+              </div>
+              <div id="kanban" class="kanban">
+                <div class="column" data-status="todo">
+                  <div class="col-title">Por hacer</div>
+                  <div class="col-list" id="col-todo"></div>
+                </div>
+                <div class="column" data-status="doing">
+                  <div class="col-title">En curso</div>
+                  <div class="col-list" id="col-doing"></div>
+                </div>
+                <div class="column" data-status="review">
+                  <div class="col-title">Revisión</div>
+                  <div class="col-list" id="col-review"></div>
+                </div>
+                <div class="column" data-status="done">
+                  <div class="col-title">Hecho</div>
+                  <div class="col-list" id="col-done"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header"><h3>Avances</h3></div>
+              <canvas id="chart-progress"></canvas>
+            </div>
+          </section>
+
+          <section class="card status-card">
+            <div class="card-header task-global-header">
+              <div class="task-global-title">
+                <h3>Resumen por fecha</h3>
+                <small id="task-global-date-display" class="muted">Fecha seleccionada: --</small>
+              </div>
+              <div class="task-global-controls">
+                <input type="date" id="task-global-date" aria-label="Seleccionar fecha">
+                <input type="time" id="task-global-time" step="60" aria-label="Seleccionar hora">
+                <select id="task-global-filter" aria-label="Seleccionar vista">
+                  <option value="upcoming">Mis próximas cargas</option>
+                  <option value="overdue">Tareas vencidas</option>
+                  <option value="recent">Actividades recientes</option>
+                  <option value="team">Carga del equipo</option>
+                </select>
+              </div>
+            </div>
+            <ul id="task-global-list" class="list status-list"></ul>
+          </section>
+
+          <!-- Widgets secundarios debajo de Selección de trabajo y Avances -->
+          <section class="grid" id="widgets">
+            <div class="card">
+              <div class="card-header"><h3>Mis próximas entregas</h3></div>
+              <ul id="w-my-upcoming" class="list"></ul>
+            </div>
+            <div class="card activity-card">
+              <div class="card-header"><h3>Actividad reciente</h3></div>
+              <ul id="w-activity" class="list two-cols"></ul>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>Tareas vencidas</h3></div>
+              <ul id="w-overdue" class="list"></ul>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>Carga del equipo</h3></div>
+              <ul id="w-workload" class="list"></ul>
+            </div>
+          </section>
+        </section>
+
+        <!-- View: Clientes -->
+        <section id="view-clients" class="view">
+          <div class="card">
+            <div class="card-header">
+              <h3><i data-lucide="users"></i> Clientes</h3>
+              <div class="actions">
+                <div class="search"><input id="clients-search" placeholder="Buscar cliente..."></div>
+                <button id="btn-refresh-clients" class="btn btn-ghost small">
+                  <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
+                </button>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>Contacto</th>
+                    <th>Email</th>
+                    <th>Teléfono</th>
+                    <th>Creado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="clients-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- View: Empleados -->
+        <section id="view-users" class="view">
+          <div class="card">
+            <div class="card-header">
+              <h3><i data-lucide="user-square-2"></i> Empleados</h3>
+              <div class="actions">
+                <div class="search"><input id="users-search" placeholder="Buscar empleado..."></div>
+                <button id="btn-refresh-users" class="btn btn-ghost small">
+                  <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
+                </button>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>Rol</th>
+                    <th>Teléfono</th>
+                    <th>Creado</th>
+                    <th data-users-actions>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="users-tbody"></tbody>
+              </table>
+            </div>
+            <div id="users-hint" class="muted"></div>
+          </div>
+        </section>
+
+        <!-- View: Trabajos -->
+        <section id="view-jobs" class="view">
+          <div class="card">
+            <div class="card-header">
+              <h3><i data-lucide="briefcase"></i> Trabajos</h3>
+              <div class="actions">
+                <div class="search"><input id="jobs-search" placeholder="Buscar trabajo o cliente..."></div>
+                <button id="btn-refresh-jobs" class="btn btn-ghost small">
+                  <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
+                </button>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Título</th>
+                    <th>Cliente</th>
+                    <th>Categoría</th>
+                    <th>Estado</th>
+                    <th>Avance</th>
+                    <th>Presupuesto</th>
+                    <th>Costo real</th>
+                    <th>Horas (est./real)</th>
+                    <th>Entrega</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="jobs-tbody"></tbody>
+              </table>
+            </div>
+            <div id="jobs-hint" class="muted"></div>
+          </div>
+
+          <div class="card archived-card">
+            <div class="card-header">
+              <h3><i data-lucide="archive"></i> Trabajos archivados</h3>
+              <button id="btn-refresh-archived-jobs" class="btn btn-ghost small">
+                <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
+              </button>
+            </div>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Título</th>
+                    <th>Cliente</th>
+                    <th>Categoría</th>
+                    <th>Presupuesto</th>
+                    <th>Costo real</th>
+                    <th>Horas reales</th>
+                    <th>Archivado</th>
+                  </tr>
+                </thead>
+                <tbody id="jobs-archived-tbody"></tbody>
+              </table>
+            </div>
+            <div id="jobs-archived-hint" class="muted"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Modal Nuevo -->
+  <dialog id="modal-new" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>Crear nuevo</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="tab-client">Cliente</button>
+        <button class="tab" data-tab="tab-job">Trabajo</button>
+      </div>
+
+      <div id="tab-client" class="form show">
+        <label>Nombre del cliente</label>
+        <input id="client-name" placeholder="Empresa / Persona" required>
+        <label>Contacto</label>
+        <input id="client-contact" placeholder="Nombre del contacto">
+        <label>Email</label>
+        <input id="client-email" type="email" placeholder="contacto@cliente.com">
+        <label>Teléfono</label>
+        <input id="client-phone" placeholder="+57 ...">
+        <label>Notas</label>
+        <textarea id="client-notes" rows="3" placeholder="Detalles relevantes..."></textarea>
+        <button id="btn-save-client" class="btn btn-primary">Guardar cliente</button>
+      </div>
+
+      <div id="tab-job" class="form">
+        <label>Cliente</label>
+        <select id="job-client"></select>
+        <label>Título del trabajo</label>
+        <input id="job-title" placeholder="Sitio web corporativo / Automatización de Excel / ..." required>
+        <label>Categoría</label>
+        <select id="job-category">
+          <option value="web">Páginas web</option>
+          <option value="automations">Automatizaciones</option>
+          <option value="support">Soportes</option>
+          <option value="maintenance">Mantenimientos</option>
+          <option value="mobile_app">Desarrollo App Móvil</option>
+          <option value="desktop_app">Desarrollo App escritorio</option>
+        </select>
+        <label>Descripción</label>
+        <textarea id="job-desc" rows="3"></textarea>
+        <div class="row-2">
+          <div>
+            <label>Inicio</label>
+            <input id="job-start" type="datetime-local">
+          </div>
+          <div>
+            <label>Entrega estimada</label>
+            <input id="job-due" type="datetime-local">
+          </div>
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Presupuesto (COP)</label>
+            <input id="job-budget" type="text" inputmode="decimal" placeholder="0" autocomplete="off">
+          </div>
+          <div>
+            <label>Costo real (COP)</label>
+            <input id="job-actual-cost" type="text" inputmode="decimal" placeholder="0" autocomplete="off">
+          </div>
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Horas estimadas</label>
+            <input id="job-hours-estimated" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+          <div>
+            <label>Horas reales</label>
+            <input id="job-hours-real" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+        </div>
+        <button id="btn-save-job" class="btn btn-primary">Guardar trabajo</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Tarea -->
+  <dialog id="modal-task" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3 id="task-modal-title">Tarea</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <div class="form show">
+        <input type="hidden" id="task-id">
+        <div id="task-job-wrap">
+          <label>Trabajo</label>
+          <select id="task-job"></select>
+        </div>
+        <label>Título</label>
+        <input id="task-title" placeholder="Diseño landing / API endpoint / ...">
+        <label>Asignar a</label>
+        <select id="task-assignee"></select>
+        <label>Estado</label>
+        <select id="task-status">
+          <option value="todo">Por hacer</option>
+          <option value="doing">En curso</option>
+          <option value="review">Revisión</option>
+          <option value="done">Hecho</option>
+        </select>
+        <label>Progreso (%)</label>
+        <input id="task-progress" type="number" min="0" max="100" value="0">
+        <label>Horas invertidas</label>
+        <input id="task-hours" type="number" min="0" step="0.25" placeholder="0">
+        <label>Comentario (opcional)</label>
+        <textarea id="task-note" rows="2" placeholder="Qué hiciste o siguiente paso?"></textarea>
+        <div class="form-section">
+          <label for="task-attachments">Adjuntos</label>
+          <input id="task-attachments" type="file" multiple>
+          <small class="muted">Puedes adjuntar documentos, imágenes o entregables relacionados con la tarea.</small>
+          <ul id="task-attachments-list" class="attachment-list"></ul>
+        </div>
+        <div class="form-section">
+          <label>Entregables</label>
+          <div class="deliverable-input">
+            <input id="task-deliverable-input" placeholder="Nombre del entregable">
+            <button id="btn-add-deliverable" type="button" class="btn btn-ghost small">
+              <i data-lucide="plus"></i><span>Agregar</span>
+            </button>
+          </div>
+          <ul id="task-deliverables" class="deliverable-list"></ul>
+        </div>
+        <div>
+          <button id="btn-save-task" class="btn btn-primary">Guardar</button>
+          <button id="btn-complete-task" class="btn btn-ghost">Marcar como cumplida</button>
+          <button id="btn-delete-task" class="btn btn-ghost">Eliminar</button>
+        </div>
+        <div class="updates">
+          <h4>Historial</h4>
+          <div id="task-updates"></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Editar Cliente -->
+  <dialog id="modal-edit-client" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>Editar cliente</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <div class="form show">
+        <input type="hidden" id="edit-client-id">
+        <label>Nombre</label>
+        <input id="edit-client-name" placeholder="Empresa / Persona">
+        <label>Contacto</label>
+        <input id="edit-client-contact" placeholder="Nombre del contacto">
+        <label>Email</label>
+        <input id="edit-client-email" type="email" placeholder="contacto@cliente.com">
+        <label>Teléfono</label>
+        <input id="edit-client-phone" placeholder="+57 ...">
+        <label>Notas</label>
+        <textarea id="edit-client-notes" rows="3" placeholder="Detalles relevantes..."></textarea>
+        <div>
+          <button id="btn-save-edit-client" class="btn btn-primary">Guardar cambios</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Editar Usuario (admin) -->
+  <dialog id="modal-edit-user" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>Editar usuario</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <div class="form show">
+        <input type="hidden" id="edit-user-id">
+        <div class="avatar-circle">
+          <img id="edit-user-avatar-preview" alt="Avatar del usuario">
+        </div>
+        <label>Nombre completo</label>
+        <input id="edit-user-name" placeholder="Nombre Apellido">
+        <label>Rol</label>
+        <select id="edit-user-role">
+          <option value="Tecnico">Tecnico</option>
+          <option value="Asesor">Asesor</option>
+          <option value="Desarrollador Frontend">Desarrollador Frontend</option>
+          <option value="Desarrollador Backend">Desarrollador Backend</option>
+          <option value="Desarrollador Full Stack">Desarrollador Full Stack</option>
+          <option value="Diseñadores UX y UI">Diseñadores UX y UI</option>
+          <option value="Administrador">Administrador</option>
+          <option value="CEO">CEO</option>
+        </select>
+        <label>Número de teléfono</label>
+        <input id="edit-user-phone" type="tel" placeholder="+57 300 000 0000">
+        <label>URL del avatar</label>
+        <input id="edit-user-avatar" placeholder="https://.../avatar.png">
+        <div>
+          <button id="btn-save-edit-user" class="btn btn-primary">Guardar cambios</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Perfil -->
+  <dialog id="modal-profile" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>Editar usuario</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <div class="form show">
+        <div class="avatar-circle">
+          <img id="profile-avatar-preview" alt="Avatar" />
+        </div>
+        <label>Correo</label>
+        <input id="profile-email" type="email" placeholder="tucorreo@empresa.com">
+        <label>Nombre completo</label>
+        <input id="profile-name" placeholder="Nombre Apellido">
+        <label>Número de teléfono</label>
+        <input id="profile-phone" placeholder="+57 300 000 0000" type="tel">
+        <label>URL del avatar</label>
+        <input id="profile-avatar" placeholder="https://.../avatar.png">
+        <label>Nueva contraseña</label>
+        <input id="profile-password" type="password" placeholder="Mín. 8 caracteres">
+        <label>Confirmar contraseña</label>
+        <input id="profile-password2" type="password" placeholder="Repite la contraseña">
+        <div class="hint">* El rol lo gestiona un Administrador o CEO. Si no quieres cambiar la contraseña, deja los campos en blanco.</div>
+        <button id="btn-save-profile" class="btn btn-primary">Guardar cambios</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Editar Trabajo -->
+  <dialog id="modal-edit-job" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>Editar trabajo</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <div class="form show">
+        <input type="hidden" id="edit-job-id">
+        <label>Título</label>
+        <input id="edit-job-title" placeholder="Título del trabajo">
+        <label>Categoría</label>
+        <select id="edit-job-category">
+          <option value="web">Páginas web</option>
+          <option value="automations">Automatizaciones</option>
+          <option value="support">Soportes</option>
+          <option value="maintenance">Mantenimientos</option>
+          <option value="mobile_app">Desarrollo App Móvil</option>
+          <option value="desktop_app">Desarrollo App escritorio</option>
+        </select>
+        <label>Estado</label>
+        <select id="edit-job-status">
+          <option value="in_progress">En progreso</option>
+          <option value="on_hold">Pausado</option>
+          <option value="done">Completado</option>
+        </select>
+        <label>Progreso (%)</label>
+        <input id="edit-job-progress" type="number" min="0" max="100" value="0">
+        <div class="row-2">
+          <div>
+            <label>Inicio</label>
+            <input id="edit-job-start" type="datetime-local">
+          </div>
+          <div>
+            <label>Entrega estimada</label>
+            <input id="edit-job-due" type="datetime-local">
+          </div>
+        </div>
+        <label>Descripción</label>
+        <textarea id="edit-job-desc" rows="3"></textarea>
+        <div class="row-2">
+          <div>
+            <label>Presupuesto (COP)</label>
+            <input id="edit-job-budget" type="text" inputmode="decimal" placeholder="0" autocomplete="off">
+          </div>
+          <div>
+            <label>Costo real (COP)</label>
+            <input id="edit-job-actual-cost" type="text" inputmode="decimal" placeholder="0" autocomplete="off">
+          </div>
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Horas estimadas</label>
+            <input id="edit-job-hours-estimated" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+          <div>
+            <label>Horas reales</label>
+            <input id="edit-job-hours-real" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+        </div>
+        <div>
+          <button id="btn-save-edit-job" class="btn btn-primary">Guardar cambios</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Logout -->
+  <dialog id="modal-logout" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3>Cerrar sesión</h3>
+        <button class="btn btn-icon" data-close><i data-lucide="x"></i></button>
+      </div>
+      <p class="muted">¿Seguro que deseas cerrar tu sesión?</p>
+      <div>
+        <button id="btn-confirm-logout" class="btn btn-primary">Sí, salir</button>
+        <button data-close class="btn btn-ghost">Cancelar</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modal Boot/Verificando conexión -->
+  <dialog id="modal-boot" class="modal modal-boot">
+    <div class="modal-content">
+      <div class="boot-pulse">
+        <span class="boot-ring"></span>
+        <span class="boot-ring"></span>
+        <div class="boot-core"><i data-lucide="wifi"></i></div>
+      </div>
+      <div class="boot-copy">
+        <h3>Verificando conexión</h3>
+        <p>Sincronizando con la red segura de D TECH SOLUTIONS…</p>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="./supabase.js"></script>
+  <script src="./app.js"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>
