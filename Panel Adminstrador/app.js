@@ -96,6 +96,50 @@ function formatCurrencyCOP(value){
   return copFormatter.format(num);
 }
 
+function cleanNumberInputString(str){
+  return String(str)
+    .replace(/\s+/g, '')
+    .replace(/cop/gi, '')
+    .replace(/\$/g, '')
+    .replace(/[^0-9,\.\-]/g, '');
+}
+
+function parseLocalizedNumber(str){
+  if(typeof str !== 'string') return null;
+  let cleaned = cleanNumberInputString(str);
+  if(!cleaned) return null;
+  const hasComma = cleaned.includes(',');
+  const hasDot = cleaned.includes('.');
+  if(hasComma && hasDot){
+    if(cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')){
+      cleaned = cleaned.replace(/\./g, '').replace(/,/g, '.');
+    }else{
+      cleaned = cleaned.replace(/,/g, '');
+    }
+  }else if(hasComma){
+    cleaned = cleaned.replace(/,/g, '.');
+  }else if(hasDot){
+    const firstDot = cleaned.indexOf('.');
+    const secondDot = cleaned.indexOf('.', firstDot + 1);
+    if(secondDot !== -1){
+      cleaned = cleaned.replace(/\./g, '');
+    }else{
+      const fractional = cleaned.slice(firstDot + 1);
+      if(fractional.length === 3 && cleaned.slice(0, firstDot).length){
+        cleaned = cleaned.replace(/\./g, '');
+      }
+    }
+  }
+  const num = Number(cleaned);
+  return Number.isNaN(num) ? null : num;
+}
+
+function formatMoneyInputValue(value){
+  const num = toNullableNumber(value);
+  if(num === null) return '';
+  return num.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 });
+}
+
 function formatHoursValue(value){
   if(value === null || value === undefined || value === '') return '—';
   const num = Number(value);
@@ -140,9 +184,65 @@ function toNullableNumber(value){
   if(typeof value === 'number'){ return Number.isNaN(value) ? null : value; }
   const str = String(value).trim();
   if(!str) return null;
-  const normalized = str.replace(',', '.');
-  const num = Number(normalized);
-  return Number.isNaN(num) ? null : num;
+  const num = parseLocalizedNumber(str);
+  return num;
+}
+
+function normalizeDateTimeInput(value){
+  if(value === null || value === undefined) return null;
+  const str = String(value).trim();
+  if(!str || !str.includes('T')) return null;
+  const [datePart, timePartRaw] = str.split('T');
+  if(!datePart || !timePartRaw) return null;
+  let timePart = timePartRaw;
+  if(timePart.includes('+') || timePart.includes('-')){
+    const match = timePart.match(/^(\d{2}:\d{2})(?::\d{2})?/);
+    timePart = match ? match[0] : '';
+  }
+  if(!timePart) return null;
+  if(!timePart.includes(':')) return null;
+  if(timePart.length === 5){
+    timePart = `${timePart}:00`;
+  }
+  return `${datePart}T${timePart}`;
+}
+
+function applyMoneyFormatting(input, value){
+  if(!input) return;
+  const formatted = formatMoneyInputValue(value !== undefined ? value : input.value);
+  input.value = formatted;
+}
+
+function attachCurrencyFormatter(input){
+  if(!input) return;
+  input.addEventListener('input', ()=>{
+    const raw = input.value;
+    const sanitized = cleanNumberInputString(raw);
+    if(raw !== sanitized){
+      const pos = input.selectionStart;
+      const diff = raw.length - sanitized.length;
+      input.value = sanitized;
+      try{
+        const newPos = typeof pos === 'number' ? Math.max(0, pos - diff) : sanitized.length;
+        input.setSelectionRange(newPos, newPos);
+      }catch(e){}
+    }
+  });
+  input.addEventListener('focus', ()=>{
+    const num = toNullableNumber(input.value);
+    if(num !== null){
+      input.value = String(num);
+      try{ input.select(); }catch(e){}
+    }
+  });
+  input.addEventListener('blur', ()=> applyMoneyFormatting(input));
+  applyMoneyFormatting(input);
+}
+
+function initMoneyInputs(){
+  ['job-budget','job-actual-cost','edit-job-budget','edit-job-actual-cost']
+    .map(id=> document.getElementById(id))
+    .forEach(el=> attachCurrencyFormatter(el));
 }
 
 function getBogotaDateKey(value){
@@ -1081,6 +1181,7 @@ async function loadJobProgressChart(){
 
 // ---------- Enhancements / Modals avanzados ----------
 function enhanceUI(){
+  initMoneyInputs();
   // Delegación para editar tarea desde el kanban
   const kanban = document.getElementById('kanban');
   if(kanban){
@@ -1240,21 +1341,7 @@ function enhanceUI(){
   if(btnEditJob && modalEditJob){
     btnEditJob.onclick = async ()=>{
       if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
-      const { data, error } = await sb.from('jobs').select('*').eq('id', currentJob).single();
-      if(error){ toast(error.message,'error'); return; }
-      document.getElementById('edit-job-id').value = data.id;
-      document.getElementById('edit-job-title').value = data.title||'';
-      document.getElementById('edit-job-category').value = data.category || 'web';
-      document.getElementById('edit-job-status').value = data.status||'in_progress';
-      document.getElementById('edit-job-progress').value = Number(data.progress||0);
-      document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
-      document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
-      document.getElementById('edit-job-desc').value = data.description || '';
-      document.getElementById('edit-job-budget').value = data.presupuesto ?? '';
-      document.getElementById('edit-job-actual-cost').value = data.costo_real ?? '';
-      document.getElementById('edit-job-hours-estimated').value = data.horas_estimadas ?? '';
-      document.getElementById('edit-job-hours-real').value = data.horas_reales ?? '';
-      openDialog(modalEditJob);
+      await openEditJobModal(currentJob);
     };
   }
   if(btnSaveEditJob){
@@ -1267,8 +1354,8 @@ function enhanceUI(){
         category: selectedCat,
         status: document.getElementById('edit-job-status').value,
         progress: Number(document.getElementById('edit-job-progress').value||0),
-        start_at: document.getElementById('edit-job-start').value || null,
-        due_at: document.getElementById('edit-job-due').value || null,
+        start_at: normalizeDateTimeInput(document.getElementById('edit-job-start').value),
+        due_at: normalizeDateTimeInput(document.getElementById('edit-job-due').value),
         description: descValue.trim(),
         presupuesto: toNullableNumber(document.getElementById('edit-job-budget')?.value),
         costo_real: toNullableNumber(document.getElementById('edit-job-actual-cost')?.value),
@@ -1526,8 +1613,8 @@ document.getElementById("btn-save-job").onclick = async ()=>{
     title: document.getElementById("job-title").value.trim(),
     category: selectedCat,
     description: descriptionInput.trim(),
-    start_at: document.getElementById("job-start").value || null,
-    due_at: document.getElementById("job-due").value || null,
+    start_at: normalizeDateTimeInput(document.getElementById("job-start").value),
+    due_at: normalizeDateTimeInput(document.getElementById("job-due").value),
     presupuesto: toNullableNumber(document.getElementById('job-budget')?.value),
     costo_real: toNullableNumber(document.getElementById('job-actual-cost')?.value),
     horas_estimadas: toNullableNumber(document.getElementById('job-hours-estimated')?.value),
@@ -2119,8 +2206,16 @@ async function openEditJobModal(id){
   document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
   document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
   document.getElementById('edit-job-desc').value = data.description||'';
-  document.getElementById('edit-job-budget').value = data.presupuesto ?? '';
-  document.getElementById('edit-job-actual-cost').value = data.costo_real ?? '';
+  const $budget = document.getElementById('edit-job-budget');
+  if($budget){
+    $budget.value = data.presupuesto ?? '';
+    applyMoneyFormatting($budget);
+  }
+  const $actual = document.getElementById('edit-job-actual-cost');
+  if($actual){
+    $actual.value = data.costo_real ?? '';
+    applyMoneyFormatting($actual);
+  }
   document.getElementById('edit-job-hours-estimated').value = data.horas_estimadas ?? '';
   document.getElementById('edit-job-hours-real').value = data.horas_reales ?? '';
   openDialog(document.getElementById('modal-edit-job'));
