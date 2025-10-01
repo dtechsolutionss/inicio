@@ -1,5 +1,6 @@
 ﻿const $auth = document.getElementById("auth");
 const $app  = document.getElementById("app");
+const $authBackHome = document.querySelector(".auth-floating-back");
 const $overlay = document.getElementById("overlay");
 const $ovTitle = document.getElementById("overlay-title");
 const $ovSub   = document.getElementById("overlay-sub");
@@ -47,9 +48,286 @@ function catLabel(key){
 
 const MANAGER_ROLES = new Set(["CEO", "Administrador"]);
 const DEFAULT_ROLE = "Tecnico";
+const ROLE_PRIORITY = { CEO:0, Administrador:1 };
+const BOGOTA_TZ = 'America/Bogota';
+const copFormatter = new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 });
+
+const JOB_METRIC_KEYS = ['presupuesto','costo_real','horas_estimadas','horas_reales'];
+let jobMetricsKnown = false;
+let jobMetricsSupport = false;
+let jobMetricsSelectFragment = '';
+
+function applyJobMetricsClasses(){
+  const body = document.body;
+  if(!body) return;
+  body.classList.toggle('no-job-metrics', !jobMetricsSupport);
+  body.classList.toggle('has-job-metrics', !!jobMetricsSupport);
+}
+
+function setJobMetricsSupport(value){
+  const next = !!value;
+  if(jobMetricsKnown && jobMetricsSupport === next) return;
+  jobMetricsSupport = next;
+  jobMetricsKnown = true;
+  jobMetricsSelectFragment = next ? `,${JOB_METRIC_KEYS.join(',')}` : '';
+  applyJobMetricsClasses();
+}
+
+function updateJobMetricsFromRows(rows){
+  if(!Array.isArray(rows) || !rows.length) return;
+  const sample = rows.find(row => row && typeof row === 'object');
+  if(!sample) return;
+  const supported = JOB_METRIC_KEYS.some(key => Object.prototype.hasOwnProperty.call(sample, key));
+  setJobMetricsSupport(supported);
+}
+
+async function ensureJobMetricsSupport(){
+  if(jobMetricsKnown) return jobMetricsSupport;
+  try{
+    const { data, error } = await sb.from('jobs').select('*').limit(1);
+    if(error){
+      setJobMetricsSupport(false);
+      return jobMetricsSupport;
+    }
+    const sample = Array.isArray(data) ? data.find(row => row && typeof row === 'object') : (data || null);
+    if(sample){
+      const supported = JOB_METRIC_KEYS.some(key => Object.prototype.hasOwnProperty.call(sample, key));
+      setJobMetricsSupport(supported);
+    }else{
+      setJobMetricsSupport(false);
+    }
+  }catch(err){
+    setJobMetricsSupport(false);
+  }
+  return jobMetricsSupport;
+}
+
+applyJobMetricsClasses();
+
+let canManageUsers = false;
+let supportsBlocking = false;
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
+}
+
+function formatBogotaParts(value){
+  if(!value) return null;
+  try{
+    const date = value instanceof Date ? value : new Date(value);
+    if(Number.isNaN(date.getTime())) return null;
+    const formatter = new Intl.DateTimeFormat('es-CO', {
+      timeZone: BOGOTA_TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    const map = {};
+    parts.forEach(p=>{ if(p.type !== 'literal') map[p.type] = p.value; });
+    return map;
+  }catch(e){ return null; }
+}
+
+function formatDateTimeBogota(value, includeTime = true){
+  const parts = formatBogotaParts(value);
+  if(!parts) return '';
+  const dateStr = `${parts.day}/${parts.month}/${parts.year}`;
+  if(!includeTime) return dateStr;
+  if(!parts.hour || !parts.minute) return dateStr;
+  return `${dateStr} ${parts.hour}:${parts.minute}`;
+}
+
+function formatCurrencyCOP(value){
+  if(value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if(Number.isNaN(num)) return '—';
+  return copFormatter.format(num);
+}
+
+function cleanNumberInputString(str){
+  return String(str)
+    .replace(/\s+/g, '')
+    .replace(/cop/gi, '')
+    .replace(/\$/g, '')
+    .replace(/[^0-9,\.\-]/g, '');
+}
+
+function parseLocalizedNumber(str){
+  if(typeof str !== 'string') return null;
+  let cleaned = cleanNumberInputString(str);
+  if(!cleaned) return null;
+  const hasComma = cleaned.includes(',');
+  const hasDot = cleaned.includes('.');
+  if(hasComma && hasDot){
+    if(cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')){
+      cleaned = cleaned.replace(/\./g, '').replace(/,/g, '.');
+    }else{
+      cleaned = cleaned.replace(/,/g, '');
+    }
+  }else if(hasComma){
+    cleaned = cleaned.replace(/,/g, '.');
+  }else if(hasDot){
+    const firstDot = cleaned.indexOf('.');
+    const secondDot = cleaned.indexOf('.', firstDot + 1);
+    if(secondDot !== -1){
+      cleaned = cleaned.replace(/\./g, '');
+    }else{
+      const fractional = cleaned.slice(firstDot + 1);
+      if(fractional.length === 3 && cleaned.slice(0, firstDot).length){
+        cleaned = cleaned.replace(/\./g, '');
+      }
+    }
+  }
+  const num = Number(cleaned);
+  return Number.isNaN(num) ? null : num;
+}
+
+function formatMoneyInputValue(value){
+  const num = toNullableNumber(value);
+  if(num === null) return '';
+  return num.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 });
+}
+
+function formatHoursValue(value){
+  if(value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if(Number.isNaN(num)) return '—';
+  return `${num.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h`;
+}
+
+function buildDeltaChip(current, reference, positiveIsGood = false){
+  if(current === null || current === undefined || current === '' || reference === null || reference === undefined || reference === ''){
+    return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  }
+  const curr = Number(current);
+  const ref = Number(reference);
+  if(Number.isNaN(curr) || Number.isNaN(ref)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  const delta = curr - ref;
+  if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">En presupuesto</span>';
+  const favorable = positiveIsGood ? delta >= 0 : delta <= 0;
+  const cls = favorable ? 'delta-positive' : 'delta-negative';
+  const label = copFormatter.format(Math.abs(delta));
+  const text = favorable ? `A favor ${label}` : `Sobrepasa ${label}`;
+  return `<span class="delta-chip ${cls}">${text}</span>`;
+}
+
+function buildHoursDelta(real, estimated){
+  if(real === null || real === undefined || real === '' || estimated === null || estimated === undefined || estimated === ''){
+    return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  }
+  const r = Number(real);
+  const e = Number(estimated);
+  if(Number.isNaN(r) || Number.isNaN(e)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  const delta = r - e;
+  if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">Dentro del plan</span>';
+  const favorable = delta <= 0;
+  const cls = favorable ? 'delta-positive' : 'delta-negative';
+  const label = `${Math.abs(delta).toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h`;
+  const text = favorable ? `Ahorro ${label}` : `Extra ${label}`;
+  return `<span class="delta-chip ${cls}">${text}</span>`;
+}
+
+function toNullableNumber(value){
+  if(value === null || value === undefined) return null;
+  if(typeof value === 'number'){ return Number.isNaN(value) ? null : value; }
+  const str = String(value).trim();
+  if(!str) return null;
+  const num = parseLocalizedNumber(str);
+  return num;
+}
+
+function normalizeDateTimeInput(value){
+  if(value === null || value === undefined) return null;
+  const str = String(value).trim();
+  if(!str || !str.includes('T')) return null;
+  const [datePart, timePartRaw] = str.split('T');
+  if(!datePart || !timePartRaw) return null;
+  let timePart = timePartRaw;
+  if(timePart.includes('+') || timePart.includes('-')){
+    const match = timePart.match(/^(\d{2}:\d{2})(?::\d{2})?/);
+    timePart = match ? match[0] : '';
+  }
+  if(!timePart) return null;
+  if(!timePart.includes(':')) return null;
+  if(timePart.length === 5){
+    timePart = `${timePart}:00`;
+  }
+  return `${datePart}T${timePart}`;
+}
+
+function applyMoneyFormatting(input, value){
+  if(!input) return;
+  const formatted = formatMoneyInputValue(value !== undefined ? value : input.value);
+  input.value = formatted;
+}
+
+function attachCurrencyFormatter(input){
+  if(!input) return;
+  input.addEventListener('input', ()=>{
+    const raw = input.value;
+    const sanitized = cleanNumberInputString(raw);
+    if(raw !== sanitized){
+      const pos = input.selectionStart;
+      const diff = raw.length - sanitized.length;
+      input.value = sanitized;
+      try{
+        const newPos = typeof pos === 'number' ? Math.max(0, pos - diff) : sanitized.length;
+        input.setSelectionRange(newPos, newPos);
+      }catch(e){}
+    }
+  });
+  input.addEventListener('focus', ()=>{
+    const num = toNullableNumber(input.value);
+    if(num !== null){
+      input.value = String(num);
+      try{ input.select(); }catch(e){}
+    }
+  });
+  input.addEventListener('blur', ()=> applyMoneyFormatting(input));
+  applyMoneyFormatting(input);
+}
+
+function initMoneyInputs(){
+  ['job-budget','job-actual-cost','edit-job-budget','edit-job-actual-cost']
+    .map(id=> document.getElementById(id))
+    .forEach(el=> attachCurrencyFormatter(el));
+}
+
+function getBogotaDateKey(value){
+  const parts = formatBogotaParts(value);
+  if(!parts) return '';
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatForDateInput(date){
+  if(!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const y = date.getFullYear();
+  const m = String(date.getMonth()+1).padStart(2,'0');
+  const d = String(date.getDate()).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
+
+function formatForTimeInput(date){
+  if(!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const hh = String(date.getHours()).padStart(2,'0');
+  const mm = String(date.getMinutes()).padStart(2,'0');
+  return `${hh}:${mm}`;
+}
+
+function getTaskGlobalReferenceDate(){
+  const date = ($taskGlobalDate?.value || '').trim();
+  const time = ($taskGlobalTime?.value || '').trim();
+  if(!date){
+    return new Date();
+  }
+  const iso = `${date}T${time || '00:00'}-05:00`;
+  const parsed = new Date(iso);
+  if(Number.isNaN(parsed.getTime())) return new Date();
+  return parsed;
 }
 
 
@@ -76,7 +354,7 @@ function showView(name){
   $navItems.forEach(n=> n.classList.toggle('active', n.dataset.view===name));
   lucide.createIcons();
   if(name==='clients') loadClientsList();
-  if(name==='jobs') loadJobsTable();
+  if(name==='jobs'){ loadJobsTable(); loadArchivedJobsTable(); }
   if(name==='users') loadUsersList();
 }
 $navItems.forEach(n=> n.onclick = ()=> showView(n.dataset.view));
@@ -96,6 +374,18 @@ const $taskProgress = document.getElementById('task-progress');
 const $taskModalTitle = document.getElementById('task-modal-title');
 const $taskJob = document.getElementById('task-job');
 const $taskJobWrap = document.getElementById('task-job-wrap');
+const $taskHours = document.getElementById('task-hours');
+const $taskAttachmentsInput = document.getElementById('task-attachments');
+const $taskAttachmentsList = document.getElementById('task-attachments-list');
+const $taskDeliverableInput = document.getElementById('task-deliverable-input');
+const $taskDeliverablesList = document.getElementById('task-deliverables');
+const $btnAddDeliverable = document.getElementById('btn-add-deliverable');
+const $taskGlobalFilter = document.getElementById('task-global-filter');
+const $taskGlobalDate = document.getElementById('task-global-date');
+const $taskGlobalTime = document.getElementById('task-global-time');
+const $taskGlobalDateDisplay = document.getElementById('task-global-date-display');
+const $taskGlobalList = document.getElementById('task-global-list');
+const $btnCompleteTask = document.getElementById('btn-complete-task');
 
 // Sidebar brand (will be initialized on boot)
 let $brandAvatar = null, $brandName = null, $brandRole = null;
@@ -114,13 +404,6 @@ function setupBrandUI(){
     $brandAvatar = document.getElementById('brand-avatar');
     $brandName = document.getElementById('brand-name');
     $brandRole = document.getElementById('brand-role');
-  }
-  const topLeft = document.querySelector('.topbar .left');
-  if(topLeft && !topLeft.querySelector('.logo-xs')){
-    const img = document.createElement('img');
-    img.src = './assets/logo.png'; img.alt = 'logo'; img.className = 'logo-xs';
-    const h2 = topLeft.querySelector('h2');
-    topLeft.insertBefore(img, h2 || topLeft.firstChild);
   }
 }
 
@@ -190,13 +473,14 @@ if($btnLogout){ $btnLogout.onclick = async ()=>{ await sb.auth.signOut(); locati
 // Volver a Web Principal con transición usando overlay existente
 try{
   const back = document.getElementById('backHome');
-  if(back){
-    back.addEventListener('click', (e)=>{
-      e.preventDefault();
-      try{ showLoading('Volviendo a la Web Principal',''); }catch(e){}
-      setTimeout(()=>{ window.location.href = '../Web%20Principal/index.html'; }, 550);
-    });
-  }
+  const backAuth = $authBackHome;
+  const handler = (e)=>{
+    e.preventDefault();
+    try{ showLoading('Volviendo a la Web Principal',''); }catch(e){}
+    setTimeout(()=>{ window.location.href = '../Web%20Principal/index.html'; }, 550);
+  };
+  if(back){ back.addEventListener('click', handler); }
+  if(backAuth){ backAuth.addEventListener('click', handler); }
 }catch(e){}
 
 // ---------- Tema (oscuro por defecto + toggle) ----------
@@ -229,6 +513,7 @@ async function boot(){
   if(!user){
     $auth.classList.remove('hidden');
     $app.classList.add('hidden');
+    if($authBackHome) $authBackHome.classList.remove('hidden');
     return;
   }
   const me = await getMe();
@@ -246,6 +531,7 @@ async function boot(){
     $tenure.innerHTML = `Tiempo en la empresa: ${t}<div class="tenure-sub">Año-Mes-Días</div>`;
   }
   $auth.classList.add('hidden'); $app.classList.remove('hidden');
+  if($authBackHome) $authBackHome.classList.add('hidden');
   lucide.createIcons();
 
   bindProfileModal(me);
@@ -254,6 +540,7 @@ async function boot(){
   await loadJobs();
   await updateStats();
   try{ await loadWidgets(); }catch(e){}
+  try{ await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming'); }catch(e){}
   initKanbanDnD();
   buildChart([]);
   // set default view
@@ -274,6 +561,46 @@ async function ensureProfile(){
     const full_name = (user.user_metadata && (user.user_metadata.full_name || user.user_metadata.name)) || null;
     await sb.from("profiles").insert({ id:user.id, full_name, role: DEFAULT_ROLE });
   }
+}
+
+async function saveProfileChanges({
+  id,
+  full_name,
+  role,
+  numero_telefono,
+  avatar_url,
+  syncAuth = false,
+  authUser = null,
+  emailNew = '',
+  newPassword = ''
+}){
+  if(!id) throw new Error('Usuario no válido.');
+  const payload = {
+    full_name: full_name || null,
+    numero_telefono: numero_telefono || null,
+    avatar_url: avatar_url || null,
+  };
+  if(typeof role !== 'undefined'){
+    payload.role = role || DEFAULT_ROLE;
+  }
+  const { data, error } = await sb
+    .from('profiles')
+    .update(payload)
+    .eq('id', id)
+    .select('id,full_name,role,numero_telefono,avatar_url')
+    .maybeSingle();
+  if(error) throw error;
+  if(syncAuth){
+    const user = authUser || (await sb.auth.getUser()).data?.user;
+    if(user && user.id === id){
+      const authPayload = { data: { full_name, phone: numero_telefono || null } };
+      if(newPassword) authPayload.password = newPassword;
+      if(emailNew && emailNew !== user.email) authPayload.email = emailNew;
+      const { error: authError } = await sb.auth.updateUser(authPayload);
+      if(authError) throw authError;
+    }
+  }
+  return data;
 }
 async function getMe(){
   const { data: { user } } = await sb.auth.getUser();
@@ -322,52 +649,283 @@ async function loadMyUpcoming(){
   const box = document.getElementById('w-my-upcoming'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
   const me = await getMe();
-  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,created_at').eq('assignee', me.id).neq('status','done');
+  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,created_at,horas_invertidas').eq('assignee', me.id).neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
   const jobIds = [...new Set((tasks||[]).map(t=>t.job_id).filter(Boolean))];
   let jobsMap = {};
-  if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,title,due_at').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
+  let metricsEnabled = await ensureJobMetricsSupport();
+  if(jobIds.length){
+    const selectFields = `id,title,due_at${metricsEnabled ? jobMetricsSelectFragment : ''}`;
+    const { data: jobs } = await sb.from('jobs').select(selectFields).in('id', jobIds);
+    updateJobMetricsFromRows(jobs);
+    metricsEnabled = jobMetricsSupport;
+    (jobs||[]).forEach(j=> jobsMap[j.id]=j);
+  }
   const rows = (tasks||[]).map(t=>({ t, j: jobsMap[t.job_id] })).filter(x=>x.j && x.j.due_at).sort((a,b)=> new Date(a.j.due_at)-new Date(b.j.due_at)).slice(0,6);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin próximas entregas</li>'; return; }
-  box.innerHTML = rows.map(({t,j})=>`<li><span>${t.title}</span><span class="meta">Entrega ${dayjs(j.due_at).format('DD/MM HH:mm')}</span></li>`).join('');
+  box.innerHTML = rows.map(({t,j})=>{
+    const due = formatDateTimeBogota(j.due_at);
+    const logged = t.horas_invertidas ? ` · ${formatHoursValue(t.horas_invertidas)} registradas` : '';
+    let extras = '';
+    if(metricsEnabled){
+      const budgetChip = buildDeltaChip(j.costo_real, j.presupuesto);
+      const hoursDelta = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+      extras = `<br>${budgetChip} ${hoursDelta}`;
+    }
+    return `<li><span>${t.title}</span><span class="meta">Entrega ${due}${logged}${extras}</span></li>`;
+  }).join('');
 }
 
 async function loadOverdue(){
   const box = document.getElementById('w-overdue'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
   const me = await getMe(); const manager = me && isManager(me.role);
-  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,assignee').neq('status','done');
+  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,assignee,horas_invertidas').neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
   const filtered = (tasks||[]).filter(t=> manager || t.assignee===me.id);
   const jobIds = [...new Set(filtered.map(t=>t.job_id).filter(Boolean))];
   let jobsMap = {};
-  if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,due_at').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
+  let metricsEnabled = await ensureJobMetricsSupport();
+  if(jobIds.length){
+    const selectFields = `id,due_at${metricsEnabled ? jobMetricsSelectFragment : ''}`;
+    const { data: jobs } = await sb.from('jobs').select(selectFields).in('id', jobIds);
+    updateJobMetricsFromRows(jobs);
+    metricsEnabled = jobMetricsSupport;
+    (jobs||[]).forEach(j=> jobsMap[j.id]=j);
+  }
   const now = new Date();
   const rows = filtered.map(t=>({ t, j:jobsMap[t.job_id] })).filter(x=>x.j && x.j.due_at && new Date(x.j.due_at) < now).sort((a,b)=> new Date(a.j.due_at)-new Date(b.j.due_at)).slice(0,6);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin vencidas</li>'; return; }
-  box.innerHTML = rows.map(({t,j})=>`<li><span>${t.title}</span><span class="meta">Venció ${dayjs(j.due_at).format('DD/MM HH:mm')}</span></li>`).join('');
+  box.innerHTML = rows.map(({t,j})=>{
+    const due = formatDateTimeBogota(j.due_at);
+    const logged = t.horas_invertidas ? ` · ${formatHoursValue(t.horas_invertidas)} registradas` : '';
+    let extras = '';
+    if(metricsEnabled){
+      const budgetChip = buildDeltaChip(j.costo_real, j.presupuesto);
+      const hoursDelta = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+      extras = `<br>${budgetChip} ${hoursDelta}`;
+    }
+    return `<li><span>${t.title}</span><span class="meta">Venció ${due}${logged}${extras}</span></li>`;
+  }).join('');
 }
 
 async function loadWorkload(){
   const box = document.getElementById('w-workload'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
-  const { data: tasks, error } = await sb.from('tasks').select('assignee,status').neq('status','done');
+  const { data: tasks, error } = await sb.from('tasks').select('assignee,status,job_id,horas_invertidas').neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
   const groups = {};
+  const jobIds = [...new Set((tasks||[]).map(t=> t.job_id).filter(Boolean))];
+  const jobsMap = {};
+  let metricsEnabled = await ensureJobMetricsSupport();
+  if(jobIds.length){
+    const selectFields = `id${metricsEnabled ? jobMetricsSelectFragment : ''}`;
+    const { data: jobs } = await sb.from('jobs').select(selectFields).in('id', jobIds);
+    updateJobMetricsFromRows(jobs);
+    metricsEnabled = jobMetricsSupport;
+    (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
+  }
   (tasks||[]).forEach(t=>{
     const k = t.assignee || 'sin';
-    groups[k] = groups[k] || { doing:0, review:0, todo:0, total:0 };
+    groups[k] = groups[k] || { doing:0, review:0, todo:0, total:0, hoursLogged:0, jobsSeen:new Set(), budgetPlanned:0, budgetActual:0, hoursEstimated:0, hoursReal:0 };
     if(t.status==='doing') groups[k].doing++;
     else if(t.status==='review') groups[k].review++;
     else if(t.status==='todo') groups[k].todo++;
     groups[k].total++;
+    const hoursTask = Number(t.horas_invertidas || 0);
+    if(!Number.isNaN(hoursTask)) groups[k].hoursLogged += hoursTask;
+    const job = jobsMap[t.job_id];
+    if(metricsEnabled && job && !groups[k].jobsSeen.has(job.id)){
+      groups[k].jobsSeen.add(job.id);
+      const planned = Number(job.presupuesto || 0);
+      const actual = Number(job.costo_real || 0);
+      if(!Number.isNaN(planned)) groups[k].budgetPlanned += planned;
+      if(!Number.isNaN(actual)) groups[k].budgetActual += actual;
+      const hEst = Number(job.horas_estimadas || 0);
+      const hReal = Number(job.horas_reales || 0);
+      if(!Number.isNaN(hEst)) groups[k].hoursEstimated += hEst;
+      if(!Number.isNaN(hReal)) groups[k].hoursReal += hReal;
+    }
   });
   const ids = Object.keys(groups).filter(k=> k!=='sin');
   let names = {};
   if(ids.length){ const { data: ppl } = await sb.from('profiles').select('id,full_name').in('id', ids); (ppl||[]).forEach(p=> names[p.id]=p.full_name); }
-  const rows = Object.entries(groups).map(([id,c])=>({ name: names[id] || (id==='sin'?'Sin asignar':'Usuario'), ...c })).sort((a,b)=> b.total-a.total).slice(0,8);
+  const rows = Object.entries(groups).map(([id,c])=>({ name: names[id] || (id==='sin'?'Sin asignar':'Usuario'), ...c, jobsSeen: undefined })).sort((a,b)=> b.total-a.total).slice(0,8);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin datos</li>'; return; }
-  box.innerHTML = rows.map(r=>`<li><span>${r.name}</span><span class="meta">En curso ${r.doing} · En revisión ${r.review} · Total ${r.total}</span></li>`).join('');
+  box.innerHTML = rows.map(r=>{
+    const hoursLogged = r.hoursLogged ? `${r.hoursLogged.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h registradas` : 'Sin horas registradas';
+    let extras = '';
+    if(metricsEnabled){
+      const budgetChip = buildDeltaChip(r.budgetActual, r.budgetPlanned);
+      const hoursDelta = (r.hoursEstimated || r.hoursReal) ? buildHoursDelta(r.hoursReal, r.hoursEstimated) : '<span class="delta-chip delta-neutral">Sin horas planificadas</span>';
+      extras = `<br>${budgetChip} ${hoursDelta}`;
+    }
+    return `<li><span>${r.name}</span><span class="meta">En curso ${r.doing} · En revisión ${r.review} · Total ${r.total}<br>${hoursLogged}${extras}</span></li>`;
+  }).join('');
+}
+
+async function loadTaskGlobalList(mode = 'upcoming'){
+  if(!$taskGlobalList) return;
+  const reference = getTaskGlobalReferenceDate();
+  if($taskGlobalDateDisplay){
+    const label = formatDateTimeBogota(reference) || '--';
+    $taskGlobalDateDisplay.textContent = `Fecha seleccionada: ${label}`;
+  }
+  $taskGlobalList.innerHTML = '<li class="meta">Cargando…</li>';
+  let me = null;
+  try{ me = await getMe(); }catch(e){}
+  const manager = me && isManager(me?.role);
+  const nowTs = reference.getTime();
+  const referenceDateKey = getBogotaDateKey(reference);
+  try{
+    let metricsEnabled = await ensureJobMetricsSupport();
+    if(mode === 'recent'){
+      const { data, error } = await sb.from('task_updates')
+        .select('task_id,user_id,progress,note,created_at')
+        .order('created_at', { ascending:false })
+        .limit(10);
+      if(error) throw error;
+      const rows = (data || []).filter(r=> getBogotaDateKey(r.created_at) === referenceDateKey);
+      if(!rows.length){ $taskGlobalList.innerHTML = '<li class="meta">Sin actividad reciente.</li>'; return; }
+      const tids = [...new Set(rows.map(r=> r.task_id).filter(Boolean))];
+      const uids = [...new Set(rows.map(r=> r.user_id).filter(Boolean))];
+      const taskNames = {};
+      const userNames = {};
+      if(tids.length){
+        const { data: tasks } = await sb.from('tasks').select('id,title').in('id', tids);
+        (tasks||[]).forEach(t=>{ if(t && t.id) taskNames[t.id] = t.title; });
+      }
+      if(uids.length){
+        const { data: ppl } = await sb.from('profiles').select('id,full_name').in('id', uids);
+        (ppl||[]).forEach(p=>{ if(p && p.id) userNames[p.id] = p.full_name; });
+      }
+      $taskGlobalList.innerHTML = rows.map(r=>{
+        const title = taskNames[r.task_id] || 'Tarea';
+        const who = userNames[r.user_id] || 'Usuario';
+        const when = formatDateTimeBogota(r.created_at);
+        const prog = typeof r.progress === 'number' ? ` · ${r.progress}%` : '';
+        const note = r.note ? ` · ${r.note}` : '';
+        return `<li class="is-recent"><span>${title}</span><span class="meta">${when} · ${who}${prog}${note}</span></li>`;
+      }).join('');
+      return;
+    }
+
+    if(mode === 'team'){
+      const { data: tasks, error } = await sb.from('tasks').select('assignee,status,job_id,horas_invertidas').neq('status','done');
+      if(error) throw error;
+      const jobIds = [...new Set((tasks||[]).map(t=> t.job_id).filter(Boolean))];
+      const jobsMap = {};
+      let localMetrics = metricsEnabled;
+      if(jobIds.length){
+        const selectFields = `id,due_at${localMetrics ? jobMetricsSelectFragment : ''}`;
+        const { data: jobs } = await sb.from('jobs').select(selectFields).in('id', jobIds);
+        updateJobMetricsFromRows(jobs);
+        localMetrics = jobMetricsSupport;
+        (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
+      }
+      const groups = {};
+      (tasks||[])
+        .map(task=>({ task, job: jobsMap[task.job_id] }))
+        .filter(x=> x.job && x.job.due_at && getBogotaDateKey(x.job.due_at) === referenceDateKey)
+        .forEach(({ task: t })=>{
+        const key = t.assignee || 'sin';
+        groups[key] = groups[key] || { total:0, doing:0, review:0, todo:0, hoursLogged:0, jobsSeen:new Set(), budgetPlanned:0, budgetActual:0, hoursEstimated:0, hoursReal:0 };
+        if(t.status==='doing') groups[key].doing++;
+        else if(t.status==='review') groups[key].review++;
+        else if(t.status==='todo') groups[key].todo++;
+        groups[key].total++;
+        const hoursTask = Number(t.horas_invertidas || 0);
+        if(!Number.isNaN(hoursTask)) groups[key].hoursLogged += hoursTask;
+        const job = jobsMap[t.job_id];
+        if(localMetrics && job && !groups[key].jobsSeen.has(job.id)){
+          groups[key].jobsSeen.add(job.id);
+          const planned = Number(job.presupuesto || 0);
+          const actual = Number(job.costo_real || 0);
+          if(!Number.isNaN(planned)) groups[key].budgetPlanned += planned;
+          if(!Number.isNaN(actual)) groups[key].budgetActual += actual;
+          const hEst = Number(job.horas_estimadas || 0);
+          const hReal = Number(job.horas_reales || 0);
+          if(!Number.isNaN(hEst)) groups[key].hoursEstimated += hEst;
+          if(!Number.isNaN(hReal)) groups[key].hoursReal += hReal;
+        }
+      });
+      const ids = Object.keys(groups).filter(k=> k !== 'sin' && k);
+      const names = { sin: 'Sin asignar' };
+      if(ids.length){
+        const { data: ppl } = await sb.from('profiles').select('id,full_name').in('id', ids);
+        (ppl||[]).forEach(p=>{ if(p && p.id) names[p.id] = p.full_name || p.id; });
+      }
+      const rows = Object.entries(groups).map(([id, stats])=>({
+        id,
+        name: names[id] || (id==='sin' ? 'Sin asignar' : 'Usuario'),
+        ...stats,
+        jobsSeen: undefined
+      })).sort((a,b)=> b.total - a.total).slice(0,8);
+      if(!rows.length){ $taskGlobalList.innerHTML = '<li class="meta">Sin tareas activas.</li>'; return; }
+      $taskGlobalList.innerHTML = rows.map(r=>{
+        const hoursLogged = r.hoursLogged ? `${r.hoursLogged.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h registradas` : 'Sin horas registradas';
+        let extras = '';
+        if(localMetrics){
+          const budgetChip = buildDeltaChip(r.budgetActual, r.budgetPlanned);
+          const hoursDelta = (r.hoursEstimated || r.hoursReal) ? buildHoursDelta(r.hoursReal, r.hoursEstimated) : '<span class="delta-chip delta-neutral">Sin horas planificadas</span>';
+          extras = `<br>${budgetChip} ${hoursDelta}`;
+        }
+        return `
+          <li class="is-team">
+            <span>${r.name}</span>
+            <span class="meta">Tareas ${r.total} · En curso ${r.doing} · Revisión ${r.review}<br>${hoursLogged}${extras}</span>
+          </li>
+        `;
+      }).join('');
+      return;
+    }
+
+    if(!me){ $taskGlobalList.innerHTML = '<li class="meta">Inicia sesión para ver tus tareas.</li>'; return; }
+    const { data: tasks, error } = await sb.from('tasks')
+      .select('id,title,status,progress,assignee,job_id,horas_invertidas')
+      .neq('status','done');
+    if(error) throw error;
+    const pool = (tasks||[]).filter(t=>{
+      if(mode === 'upcoming') return t.assignee === (me && me.id);
+      if(manager) return true;
+      return t.assignee === (me && me.id);
+    });
+    const jobIds = [...new Set(pool.map(t=> t.job_id).filter(Boolean))];
+    const jobsMap = {};
+    if(jobIds.length){
+      const selectFields = `id,title,due_at${metricsEnabled ? jobMetricsSelectFragment : ''}`;
+      const { data: jobs } = await sb.from('jobs').select(selectFields).in('id', jobIds);
+      updateJobMetricsFromRows(jobs);
+      metricsEnabled = jobMetricsSupport;
+      (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
+    }
+    const annotated = pool.map(t=>({ t, job: jobsMap[t.job_id] })).filter(x=> x.job && x.job.due_at);
+    const cmp = mode === 'overdue'
+      ? annotated.filter(x=> new Date(x.job.due_at).getTime() < nowTs)
+      : annotated.filter(x=> new Date(x.job.due_at).getTime() >= nowTs);
+    cmp.sort((a,b)=> new Date(a.job.due_at) - new Date(b.job.due_at));
+    if(!cmp.length){
+      $taskGlobalList.innerHTML = mode === 'overdue'
+        ? '<li class="meta">Sin tareas vencidas.</li>'
+        : '<li class="meta">Sin próximas cargas.</li>';
+      return;
+    }
+    $taskGlobalList.innerHTML = cmp.slice(0,8).map(({ t, job })=>{
+      const due = job && job.due_at ? formatDateTimeBogota(job.due_at) : '';
+      const cls = mode === 'overdue' ? 'is-overdue' : 'is-upcoming';
+      const metaLabel = mode === 'overdue' ? `Venció ${due}` : `Entrega ${due}`;
+      const hoursLogged = t.horas_invertidas ? ` · Horas registradas ${formatHoursValue(t.horas_invertidas)}` : '';
+      let extras = '';
+      if(metricsEnabled){
+        const budgetChip = buildDeltaChip(job?.costo_real, job?.presupuesto);
+        const hoursDelta = buildHoursDelta(job?.horas_reales, job?.horas_estimadas);
+        extras = `<br>${budgetChip} ${hoursDelta}`;
+      }
+      return `<li class="${cls}"><span>${t.title || job?.title || 'Tarea'}</span><span class="meta">${metaLabel}${hoursLogged}${extras}</span></li>`;
+    }).join('');
+  }catch(err){
+    $taskGlobalList.innerHTML = `<li class="meta">${err?.message || 'No fue posible cargar la información.'}</li>`;
+  }
 }
 
 async function loadRecentActivity(){
@@ -383,7 +941,7 @@ async function loadRecentActivity(){
   if(tids.length){ const { data:tt } = await sb.from('tasks').select('id,title').in('id',tids); (tt||[]).forEach(t=> tasksMap[t.id]=t.title); }
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin actividad</li>'; return; }
   box.innerHTML = rows.map(r=>{
-    const when = dayjs(r.created_at).format('DD/MM HH:mm');
+    const when = formatDateTimeBogota(r.created_at);
     const who = names[r.user_id] || 'Usuario';
     const task = tasksMap[r.task_id] || 'Tarea';
     const prog = typeof r.progress==='number' ? ` · ${r.progress}%` : '';
@@ -400,6 +958,176 @@ $search.oninput = ()=>{ filter.q = $search.value.trim(); loadJobs(); };
 
 // ---------- Jobs grid ----------
 let currentJob = null;
+const TASK_ATTACHMENTS_BUCKET = 'task-attachments';
+let currentTaskDeliverables = [];
+let currentTaskAttachments = [];
+
+function resetTaskModalExtras(){
+  currentTaskDeliverables = [];
+  currentTaskAttachments = [];
+  if($taskHours) $taskHours.value = '';
+  if($taskAttachmentsInput) $taskAttachmentsInput.value = '';
+  renderTaskDeliverables();
+  renderTaskAttachments();
+}
+
+if($btnAddDeliverable){
+  $btnAddDeliverable.onclick = ()=>{
+    const label = ($taskDeliverableInput?.value || '').trim();
+    if(!label){ toast('Escribe el nombre del entregable.','error'); return; }
+    currentTaskDeliverables.push({ label, done:false });
+    if($taskDeliverableInput) $taskDeliverableInput.value = '';
+    renderTaskDeliverables();
+  };
+}
+if($taskDeliverablesList){
+  $taskDeliverablesList.addEventListener('change', (e)=>{
+    const input = e.target.closest('input[data-deliverable-index]');
+    if(!input) return;
+    const idx = Number(input.dataset.deliverableIndex);
+    if(Number.isInteger(idx) && currentTaskDeliverables[idx]){
+      currentTaskDeliverables[idx].done = input.checked;
+    }
+  });
+  $taskDeliverablesList.addEventListener('click', (e)=>{
+    const btn = e.target.closest('[data-remove-deliverable]');
+    if(!btn) return;
+    const idx = Number(btn.dataset.removeDeliverable);
+    if(Number.isInteger(idx)){
+      currentTaskDeliverables.splice(idx,1);
+      renderTaskDeliverables();
+    }
+  });
+}
+if($taskAttachmentsList){
+  $taskAttachmentsList.addEventListener('click', (e)=>{
+    const btn = e.target.closest('[data-remove-attachment]');
+    if(!btn) return;
+    const id = btn.dataset.removeAttachment;
+    if(id) deleteTaskAttachment(id);
+  });
+}
+
+function renderTaskDeliverables(){
+  if(!$taskDeliverablesList) return;
+  if(!currentTaskDeliverables.length){
+    $taskDeliverablesList.innerHTML = '<li class="attachment-empty">Sin entregables registrados.</li>';
+    lucide.createIcons();
+    return;
+  }
+  $taskDeliverablesList.innerHTML = currentTaskDeliverables.map((item, idx)=>{
+    const safeLabel = item?.label || `Entregable ${idx+1}`;
+    const checked = item?.done ? 'checked' : '';
+    const notes = item?.notes ? `<span class="deliverable-meta">${item.notes}</span>` : '';
+    return `
+      <li>
+        <div class="deliverable-item">
+          <label>
+            <input type="checkbox" data-deliverable-index="${idx}" ${checked}>
+            <span>${safeLabel}</span>
+          </label>
+          ${notes}
+        </div>
+        <button type="button" title="Eliminar" data-remove-deliverable="${idx}"><i data-lucide="x"></i></button>
+      </li>
+    `;
+  }).join('');
+  lucide.createIcons();
+}
+
+function renderTaskAttachments(){
+  if(!$taskAttachmentsList) return;
+  if(!currentTaskAttachments.length){
+    $taskAttachmentsList.innerHTML = '<li class="attachment-empty">Sin adjuntos</li>';
+    lucide.createIcons();
+    return;
+  }
+  $taskAttachmentsList.innerHTML = currentTaskAttachments.map(att=>{
+    const safeName = att?.file_name || 'Archivo';
+    const url = att?.file_url || '#';
+    const id = att?.id || '';
+    return `
+      <li>
+        <a href="${url}" target="_blank" rel="noopener">${safeName}</a>
+        <div class="attachment-actions">
+          <button type="button" title="Eliminar adjunto" data-remove-attachment="${id}"><i data-lucide="trash-2"></i></button>
+        </div>
+      </li>
+    `;
+  }).join('');
+  lucide.createIcons();
+}
+
+async function loadTaskAttachments(taskId){
+  if(!taskId){ currentTaskAttachments = []; renderTaskAttachments(); return; }
+  try{
+    const { data, error } = await sb
+      .from('task_attachments')
+      .select('id,task_id,file_name,file_path,file_url,created_at')
+      .eq('task_id', taskId)
+      .order('created_at', { ascending:false });
+    if(error) throw error;
+    currentTaskAttachments = data || [];
+  }catch(err){
+    toast(err?.message || 'No fue posible cargar los adjuntos.', 'error');
+    currentTaskAttachments = [];
+  }
+  renderTaskAttachments();
+}
+
+async function deleteTaskAttachment(id){
+  if(!id) return;
+  const att = currentTaskAttachments.find(a=> a.id === id);
+  try{
+    if(att?.file_path){
+      await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove([att.file_path]);
+    }
+  }catch(e){}
+  try{
+    await sb.from('task_attachments').delete().eq('id', id);
+    currentTaskAttachments = currentTaskAttachments.filter(a=> a.id !== id);
+    renderTaskAttachments();
+    toast('Adjunto eliminado','ok');
+  }catch(err){
+    toast(err?.message || 'No fue posible eliminar el adjunto.','error');
+  }
+}
+
+function sanitizeFileName(name){
+  return (name || 'archivo')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-zA-Z0-9._-]+/g,'_');
+}
+
+async function uploadTaskAttachments(taskId, files = []){
+  if(!taskId || !files.length) return [];
+  const uploaded = [];
+  for(const file of files){
+    const extSafe = sanitizeFileName(file.name || 'archivo');
+    const path = `${taskId}/${Date.now()}-${Math.random().toString(36).slice(2)}-${extSafe}`;
+    const { error: upError } = await sb.storage
+      .from(TASK_ATTACHMENTS_BUCKET)
+      .upload(path, file, { upsert:false, contentType: file.type || undefined });
+    if(upError){ throw upError; }
+    const { data: pub } = sb.storage.from(TASK_ATTACHMENTS_BUCKET).getPublicUrl(path);
+    const file_url = pub?.publicUrl || '';
+    const record = {
+      task_id: taskId,
+      file_name: file.name,
+      file_path: path,
+      file_url
+    };
+    const { data, error } = await sb
+      .from('task_attachments')
+      .insert(record)
+      .select()
+      .single();
+    if(error) throw error;
+    uploaded.push(data);
+  }
+  return uploaded;
+}
+
 function catPill(cat){
   return catLabel(cat);
 }
@@ -419,25 +1147,47 @@ async function loadJobs(){
   const { data, error } = await q.order("created_at",{ ascending:false });
   if(error){ toast(error.message,"error"); return; }
 
+  updateJobMetricsFromRows(data);
+  const metricsEnabled = jobMetricsSupport;
+
   const rows = (data||[]).filter(j=>{
     if(requested === "all") return true;
     return j.category === requested;
   });
 
-  $grid.innerHTML = rows.map(j=>`
-    <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
-      <div class="row">
-        <div class="title">${j.title}</div>
-        <div class="tags"><span class="pill">${catPill(j.category)}</span></div>
-      </div>
-      <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
-      <div class="row">
-        <small class="muted">${j.client_name||''}</small>
-        <small class="muted">${j.due_at ? "Entrega "+dayjs(j.due_at).format("DD/MM HH:mm"):""}</small>
-      </div>
-      <div class="progress"><span style="width:${j.progress||0}%"></span></div>
-    </article>
-  `).join("");
+  $grid.innerHTML = rows.map(j=>{
+    const eta = j.due_at ? `Entrega ${formatDateTimeBogota(j.due_at)}` : '';
+    const finance = metricsEnabled ? (()=>{
+      const budget = formatCurrencyCOP(j.presupuesto);
+      const actual = formatCurrencyCOP(j.costo_real);
+      const hoursEst = formatHoursValue(j.horas_estimadas);
+      const hoursReal = formatHoursValue(j.horas_reales);
+      const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
+      const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+      return `
+        <div class="job-finance">
+          <div class="meta-row"><span>Presupuesto</span><strong>${budget}</strong></div>
+          <div class="meta-row"><span>Costo real</span><span>${actual}</span>${deltaBudget}</div>
+          <div class="meta-row"><span>Horas</span><span class="hours-chip">Real ${hoursReal} · Est. ${hoursEst}</span>${deltaHours}</div>
+        </div>
+      `;
+    })() : '';
+    return `
+      <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
+        <div class="row">
+          <div class="title">${j.title}</div>
+          <div class="tags"><span class="pill">${catPill(j.category)}</span></div>
+        </div>
+        <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
+        <div class="row">
+          <small class="muted">${j.client_name||''}</small>
+          <small class="muted">${eta}</small>
+        </div>
+        <div class="progress"><span style="width:${j.progress||0}%"></span></div>
+        ${finance}
+      </article>
+    `;
+  }).join("");
 
   document.querySelectorAll(".job").forEach(el=>{
     el.onclick = async ()=>{
@@ -469,6 +1219,8 @@ function initKanbanDnD(){
         const { error } = await sb.from("tasks").update({ status:newStatus }).eq("id", id);
         if(error){ toast("No se pudo mover la tarea: "+error.message,"error"); await loadKanban(); return; }
         await loadKanban(); await loadJobs(); await updateStats();
+        await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+        await loadWidgets();
       }
     });
   });
@@ -535,6 +1287,7 @@ async function loadJobProgressChart(){
 
 // ---------- Enhancements / Modals avanzados ----------
 function enhanceUI(){
+  initMoneyInputs();
   // Delegación para editar tarea desde el kanban
   const kanban = document.getElementById('kanban');
   if(kanban){
@@ -560,6 +1313,7 @@ function enhanceUI(){
         $taskProgress.value=0;
         const $note = document.getElementById('task-note'); if($note) $note.value='';
         const $updates = document.getElementById('task-updates'); if($updates) $updates.innerHTML='';
+        resetTaskModalExtras();
         $taskModalTitle.textContent='Nueva tarea';
         await loadJobsIntoTaskSelect();
         if(currentJob){
@@ -568,36 +1322,60 @@ function enhanceUI(){
         } else {
           if($taskJobWrap) $taskJobWrap.style.display = '';
         }
+        await loadTaskAttachments(null);
       }catch(e){}
+      if($btnCompleteTask){ $btnCompleteTask.style.display = 'none'; }
       openDialog(document.getElementById('modal-task'));
     };
   }
   if(btnSaveTask){
     btnSaveTask.onclick = async ()=>{
       const job_id = currentJob || ($taskJob && $taskJob.value) || null;
-      const obj = {
+      const title = document.getElementById('task-title').value.trim();
+      if(!title){ toast('Título requerido','error'); return; }
+      if(!job_id){ toast('Selecciona un trabajo','error'); return; }
+      const progressValue = Number(document.getElementById('task-progress').value || 0);
+      const hoursValueRaw = $taskHours ? $taskHours.value : '';
+      let horas_invertidas = null;
+      if(hoursValueRaw !== '' && hoursValueRaw !== null && hoursValueRaw !== undefined){
+        const parsedHours = Number(hoursValueRaw);
+        if(!Number.isNaN(parsedHours)) horas_invertidas = parsedHours;
+      }
+      const deliverablesPayload = currentTaskDeliverables.map(item=>({
+        label: item?.label || 'Entregable',
+        done: !!item?.done,
+        notes: item?.notes ? String(item.notes) : undefined
+      }));
+      const payload = {
         job_id,
-        title: document.getElementById('task-title').value.trim(),
+        title,
         assignee: document.getElementById('task-assignee').value || null,
         status: document.getElementById('task-status').value,
-        progress: Number(document.getElementById('task-progress').value || 0)
+        progress: Number.isNaN(progressValue) ? 0 : progressValue,
+        horas_invertidas,
+        deliverables: deliverablesPayload.length ? deliverablesPayload : null
       };
-      if(!obj.title){ toast('Título requerido','error'); return; }
-      if(!obj.job_id){ toast('Selecciona un trabajo','error'); return; }
+      const note = (document.getElementById('task-note')?.value || '').trim();
+      const files = $taskAttachmentsInput ? Array.from($taskAttachmentsInput.files || []) : [];
       const id = document.getElementById('task-id').value;
-      if(id){
-        const { error } = await sb.from('tasks').update(obj).eq('id', id);
-        if(error){ toast(error.message,'error'); return; }
-        try{ await addTaskUpdate(id, obj.progress, (document.getElementById('task-note')?.value || '').trim()); }catch(e){}
-        toast('Tarea actualizada','ok');
-      } else {
-        const { data, error } = await sb.from('tasks').insert(obj).select().single();
-        if(error){ toast(error.message,'error'); return; }
-        try{ await addTaskUpdate(data.id, obj.progress, (document.getElementById('task-note')?.value || '').trim() || 'Creación de tarea'); }catch(e){}
-        toast('Tarea creada','ok');
+      try{
+        if(id){
+          await updateTaskRecord(id, payload, note, files);
+          toast('Tarea actualizada','ok');
+        }else{
+          await saveTaskRecord(payload, note, files);
+          toast('Tarea creada','ok');
+        }
+      }catch(err){
+        toast(err?.message || 'No fue posible guardar la tarea.','error');
+        return;
       }
+      if($taskAttachmentsInput) $taskAttachmentsInput.value = '';
       closeDialog(document.getElementById('modal-task'));
+      resetTaskModalExtras();
       await loadKanban(); await loadJobs(); await updateStats();
+      await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+      await loadWidgets();
     };
   }
   if(btnDeleteTask){
@@ -605,11 +1383,53 @@ function enhanceUI(){
       const id = document.getElementById('task-id').value;
       if(!id){ closeDialog(document.getElementById('modal-task')); return; }
       if(!confirm('¿Eliminar tarea?')) return;
+      let attachments = [];
+      try{
+        const { data } = await sb.from('task_attachments').select('id,file_path').eq('task_id', id);
+        attachments = data || [];
+      }catch(e){}
+      if(attachments.length){
+        const ids = attachments.map(a=> a.id).filter(Boolean);
+        const paths = attachments.map(a=> a.file_path).filter(Boolean);
+        try{
+          if(paths.length) await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove(paths);
+        }catch(e){}
+        try{
+          if(ids.length) await sb.from('task_attachments').delete().in('id', ids);
+        }catch(e){}
+      }
       const { error } = await sb.from('tasks').delete().eq('id', id);
       if(error){ toast(error.message,'error'); return; }
       toast('Tarea eliminada','ok');
       closeDialog(document.getElementById('modal-task'));
       await loadKanban(); await updateStats();
+      await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+      await loadWidgets();
+    };
+  }
+  if($btnCompleteTask){
+    $btnCompleteTask.onclick = async ()=>{
+      const id = ($taskId?.value || '').trim();
+      if(!id){ toast('Selecciona una tarea válida.','error'); return; }
+      let me = null;
+      try{ me = await getMe(); }catch(e){}
+      const manager = me && isManager(me?.role);
+      let task = null;
+      try{
+        const { data, error } = await sb.from('tasks').select('assignee,status').eq('id', id).maybeSingle();
+        if(error) throw error;
+        task = data;
+      }catch(err){ toast(err?.message || 'No fue posible completar la tarea.','error'); return; }
+      if(!task){ toast('Tarea no encontrada.','error'); return; }
+      if(!manager && task.assignee !== (me && me.id)){ toast('No puedes completar esta tarea.','error'); return; }
+      const { error } = await sb.from('tasks').update({ status:'done', progress:100 }).eq('id', id);
+      if(error){ toast(error.message,'error'); return; }
+      try{ await addTaskUpdate(id, 100, 'Tarea marcada como cumplida'); }catch(e){}
+      toast('Tarea completada.','ok');
+      if(modalTask) closeDialog(modalTask);
+      await loadKanban(); await loadJobs(); await updateStats();
+      await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+      await loadWidgets();
     };
   }
 
@@ -627,17 +1447,7 @@ function enhanceUI(){
   if(btnEditJob && modalEditJob){
     btnEditJob.onclick = async ()=>{
       if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
-      const { data, error } = await sb.from('jobs').select('*').eq('id', currentJob).single();
-      if(error){ toast(error.message,'error'); return; }
-      document.getElementById('edit-job-id').value = data.id;
-      document.getElementById('edit-job-title').value = data.title||'';
-      document.getElementById('edit-job-category').value = data.category || 'web';
-      document.getElementById('edit-job-status').value = data.status||'in_progress';
-      document.getElementById('edit-job-progress').value = Number(data.progress||0);
-      document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
-      document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
-      document.getElementById('edit-job-desc').value = data.description || '';
-      openDialog(modalEditJob);
+      await openEditJobModal(currentJob);
     };
   }
   if(btnSaveEditJob){
@@ -650,10 +1460,16 @@ function enhanceUI(){
         category: selectedCat,
         status: document.getElementById('edit-job-status').value,
         progress: Number(document.getElementById('edit-job-progress').value||0),
-        start_at: document.getElementById('edit-job-start').value || null,
-        due_at: document.getElementById('edit-job-due').value || null,
+        start_at: normalizeDateTimeInput(document.getElementById('edit-job-start').value),
+        due_at: normalizeDateTimeInput(document.getElementById('edit-job-due').value),
         description: descValue.trim()
       };
+      if(await ensureJobMetricsSupport()){
+        payload.presupuesto = toNullableNumber(document.getElementById('edit-job-budget')?.value);
+        payload.costo_real = toNullableNumber(document.getElementById('edit-job-actual-cost')?.value);
+        payload.horas_estimadas = toNullableNumber(document.getElementById('edit-job-hours-estimated')?.value);
+        payload.horas_reales = toNullableNumber(document.getElementById('edit-job-hours-real')?.value);
+      }
       if(!payload.title){ toast('Título requerido','error'); return; }
       const { error } = await sb.from('jobs').update(payload).eq('id', id);
       if(error){ toast(error.message,'error'); return; }
@@ -675,28 +1491,94 @@ async function loadJobsIntoTaskSelect(){
 async function openTaskEditor(taskId){
   const { data, error } = await sb.from('tasks').select('*').eq('id', taskId).single();
   if(error){ toast(error.message,'error'); return; }
+  resetTaskModalExtras();
   await loadUsersIntoSelect();
   $taskId.value = data.id;
   $taskTitle.value = data.title || '';
   $taskAssignee.value = data.assignee || '';
   $taskStatus.value = data.status || 'todo';
   $taskProgress.value = Number(data.progress||0);
+  if($taskHours){
+    const hrs = data.horas_invertidas;
+    $taskHours.value = (hrs === null || hrs === undefined) ? '' : Number(hrs);
+  }
   const $note = document.getElementById('task-note'); if($note) $note.value = '';
   $taskModalTitle.textContent = 'Editar tarea';
   await loadJobsIntoTaskSelect();
   if($taskJob){ $taskJob.value = data.job_id || currentJob || ''; }
   if($taskJobWrap) $taskJobWrap.style.display = '';
+  currentTaskDeliverables = Array.isArray(data.deliverables)
+    ? data.deliverables.map(item=>({
+        label: item?.label || item?.titulo || 'Entregable',
+        done: !!item?.done,
+        notes: item?.notes || item?.descripcion || ''
+      }))
+    : [];
+  renderTaskDeliverables();
+  await loadTaskAttachments(taskId);
   try{ await loadTaskUpdates(taskId); }catch(e){}
+  if($btnCompleteTask){
+    let me = null;
+    try{ me = await getMe(); }catch(e){}
+    const manager = me && isManager(me?.role);
+    const canComplete = manager || (me && me.id === data.assignee);
+    $btnCompleteTask.style.display = canComplete ? '' : 'none';
+    $btnCompleteTask.disabled = !canComplete;
+  }
   openDialog(document.getElementById('modal-task'));
 }
 
 // Registrar actualización de tarea
-async function addTaskUpdate(taskId, progress, note){
+async function addTaskUpdate(taskId, progress, note, meta = {}){
   try{
     const { data: { user } } = await sb.auth.getUser();
     const user_id = user && user.id;
-    await sb.from('task_updates').insert({ task_id: taskId, user_id, progress, note: note || null });
+    const extras = [];
+    if(meta && typeof meta === 'object'){
+      if(meta.horas_invertidas !== undefined && meta.horas_invertidas !== null && meta.horas_invertidas !== ''){
+        const hrs = Number(meta.horas_invertidas);
+        if(!Number.isNaN(hrs)) extras.push(`Horas ${hrs.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })}`);
+      }
+      if(Array.isArray(meta.deliverables) && meta.deliverables.length){
+        const total = meta.deliverables.length;
+        const done = meta.deliverables.filter(d=> d && d.done).length;
+        extras.push(`Entregables ${done}/${total}`);
+      }
+    }
+    let fullNote = (note || '').trim();
+    if(extras.length){
+      fullNote = fullNote ? `${fullNote} · ${extras.join(' · ')}` : extras.join(' · ');
+    }
+    await sb.from('task_updates').insert({ task_id: taskId, user_id, progress, note: fullNote || null });
   }catch(e){}
+}
+
+async function saveTaskRecord(payload, note, files){
+  const { data, error } = await sb.from('tasks').insert(payload).select().single();
+  if(error) throw error;
+  await addTaskUpdate(data.id, payload.progress, note || 'Creación de tarea', {
+    horas_invertidas: payload.horas_invertidas,
+    deliverables: payload.deliverables || []
+  });
+  if(files && files.length){
+    currentTaskAttachments = await uploadTaskAttachments(data.id, files);
+    renderTaskAttachments();
+  }
+  return data;
+}
+
+async function updateTaskRecord(id, payload, note, files){
+  const { error } = await sb.from('tasks').update(payload).eq('id', id);
+  if(error) throw error;
+  await addTaskUpdate(id, payload.progress, note || 'Actualización de tarea', {
+    horas_invertidas: payload.horas_invertidas,
+    deliverables: payload.deliverables || []
+  });
+  if(files && files.length){
+    const uploaded = await uploadTaskAttachments(id, files);
+    currentTaskAttachments = [...uploaded, ...currentTaskAttachments];
+    renderTaskAttachments();
+  }
 }
 
 // Cargar historial de actualizaciones
@@ -720,7 +1602,7 @@ async function loadTaskUpdates(taskId){
     }
   }catch(e){}
   box.innerHTML = rows.map(r=>{
-    const when = r.created_at ? dayjs(r.created_at).format('DD/MM/YYYY HH:mm') : '';
+    const when = r.created_at ? formatDateTimeBogota(r.created_at) : '';
     const who = nameMap[r.user_id] || 'Usuario';
     const prog = (typeof r.progress === 'number') ? ` · ${r.progress}%` : '';
     const note = r.note ? `<div class="update-note">${r.note}</div>` : '';
@@ -741,6 +1623,14 @@ function initSidebarToggle(){
 }
 // ---------- Modales ----------
 const modalNew = document.getElementById("modal-new");
+const modalEditUser = document.getElementById('modal-edit-user');
+const $editUserId = document.getElementById('edit-user-id');
+const $editUserName = document.getElementById('edit-user-name');
+const $editUserRole = document.getElementById('edit-user-role');
+const $editUserPhone = document.getElementById('edit-user-phone');
+const $editUserAvatar = document.getElementById('edit-user-avatar');
+const $editUserAvatarPreview = document.getElementById('edit-user-avatar-preview');
+const $btnSaveEditUser = document.getElementById('btn-save-edit-user');
 document.querySelectorAll("#modal-new .tab").forEach(b=>{
   b.onclick=()=>{ document.querySelectorAll("#modal-new .tab,#modal-new .form").forEach(x=>x.classList.remove("active","show"));
     b.classList.add("active"); document.getElementById(b.dataset.tab).classList.add("show"); };
@@ -748,7 +1638,7 @@ document.querySelectorAll("#modal-new .tab").forEach(b=>{
 function openDialog(dlg){ if(dlg.showModal) dlg.showModal(); else dlg.setAttribute('open',''); }
 function closeDialog(dlg){ if(dlg.close) dlg.close(); else dlg.removeAttribute('open'); }
 // Cerrar con botón [data-close]
-document.querySelectorAll("#modal-new [data-close], #modal-task [data-close], #modal-profile [data-close], #modal-edit-job [data-close], #modal-edit-client [data-close], #modal-logout [data-close], #modal-boot [data-close]").forEach(b=>b.onclick=()=> closeDialog(b.closest("dialog")) );
+document.querySelectorAll("#modal-new [data-close], #modal-task [data-close], #modal-profile [data-close], #modal-edit-job [data-close], #modal-edit-client [data-close], #modal-edit-user [data-close], #modal-logout [data-close], #modal-boot [data-close]").forEach(b=>b.onclick=()=> closeDialog(b.closest("dialog")) );
 // Cerrar al hacer clic fuera del contenido del modal
 document.querySelectorAll('dialog.modal').forEach(dlg=>{
   dlg.addEventListener('click', (e)=>{
@@ -761,6 +1651,44 @@ document.querySelectorAll('dialog.modal').forEach(dlg=>{
   });
 });
 document.getElementById("btn-open-new").onclick=()=>{ openDialog(modalNew); };
+if($editUserAvatar){
+  updateEditUserAvatarPreview($editUserAvatar.value || '');
+  $editUserAvatar.addEventListener('input', ()=> updateEditUserAvatarPreview($editUserAvatar.value));
+}
+if($btnSaveEditUser){
+  $btnSaveEditUser.onclick = async ()=>{
+    if(!canManageUsers){ toast('No tienes permisos para editar usuarios.','error'); return; }
+    const id = ($editUserId?.value || '').trim();
+    if(!id){ toast('Selecciona un usuario válido.','error'); return; }
+    const full_name = ($editUserName?.value || '').trim();
+    const role = ($editUserRole?.value || DEFAULT_ROLE) || DEFAULT_ROLE;
+    const numero_telefono = ($editUserPhone?.value || '').trim();
+    const avatar_url = ($editUserAvatar?.value || '').trim();
+    try{ showLoading('Actualizando usuario…','Guardando cambios'); }catch(e){}
+    try{
+      await saveProfileChanges({
+        id,
+        full_name,
+        role,
+        numero_telefono,
+        avatar_url
+      });
+    }catch(err){
+      hideLoading();
+      const msg = err?.message || String(err);
+      toast(msg, 'error');
+      return;
+    }
+    hideLoading();
+    toast('Usuario actualizado','ok');
+    if(modalEditUser) closeDialog(modalEditUser);
+    await loadUsersList();
+    try{
+      const { data: { user } } = await sb.auth.getUser();
+      if(user && user.id === id){ await updateBrandValues(); }
+    }catch(e){}
+  };
+}
 
 // ---------- Clientes ----------
 document.getElementById("btn-save-client").onclick = async ()=>{
@@ -793,9 +1721,15 @@ document.getElementById("btn-save-job").onclick = async ()=>{
     title: document.getElementById("job-title").value.trim(),
     category: selectedCat,
     description: descriptionInput.trim(),
-    start_at: document.getElementById("job-start").value || null,
-    due_at: document.getElementById("job-due").value || null
+    start_at: normalizeDateTimeInput(document.getElementById("job-start").value),
+    due_at: normalizeDateTimeInput(document.getElementById("job-due").value)
   };
+  if(await ensureJobMetricsSupport()){
+    obj.presupuesto = toNullableNumber(document.getElementById('job-budget')?.value);
+    obj.costo_real = toNullableNumber(document.getElementById('job-actual-cost')?.value);
+    obj.horas_estimadas = toNullableNumber(document.getElementById('job-hours-estimated')?.value);
+    obj.horas_reales = toNullableNumber(document.getElementById('job-hours-real')?.value);
+  }
   if(!obj.title){ toast("Título requerido","error"); return; }
   const { error } = await sb.from("jobs").insert(obj);
   if(error){ toast(error.message,"error"); return; }
@@ -805,13 +1739,9 @@ document.getElementById("btn-save-job").onclick = async ()=>{
 
 document.getElementById("btn-edit-job").onclick = async ()=>{
   if(!currentJob){ toast("Selecciona un trabajo","error"); return; }
-  const { data } = await sb.from("jobs").select("*").eq("id", currentJob).single();
-  const newTitle = prompt("Nuevo título:", data.title);
-  if(newTitle && newTitle.trim()!==data.title){
-    const { error } = await sb.from("jobs").update({ title:newTitle.trim() }).eq("id", currentJob);
-    if(error){ toast(error.message,"error"); return; }
-    await loadJobs(); await loadKanban();
-  }
+  try{
+    await openEditJobModal(currentJob);
+  }catch(e){ toast(e?.message || 'No fue posible cargar el trabajo.','error'); }
 };
 
 // ---------- Tareas ----------
@@ -913,17 +1843,22 @@ function bindProfileModal(me){
       if(newPass !== newPass2){ toast("Las contraseñas no coinciden","error"); return; }
     }
     const { data: { user } } = await sb.auth.getUser();
-    // Actualizar perfil (nombre) para sincronizar vistas y asignaciones
-    const { error: e1 } = await sb.from("profiles").update({ full_name, avatar_url, numero_telefono: (phone || null) }).eq("id", user.id);
-    if(e1){ toast(e1.message,"error"); return; }
-    // Actualizar metadata del usuario (teléfono) y contraseña opcional
     try{
-      const payload = { data: { phone: phone || null, full_name } };
-      if(newPass) payload.password = newPass;
-      if(emailNew && emailNew !== user.email) payload.email = emailNew;
-      const { error: e2 } = await sb.auth.updateUser(payload);
-      if(e2){ toast(e2.message,'error'); return; }
-    }catch(err){ toast(String(err),'error'); return; }
+      await saveProfileChanges({
+        id: user.id,
+        full_name,
+        numero_telefono: phone,
+        avatar_url,
+        syncAuth: true,
+        authUser: user,
+        emailNew,
+        newPassword: newPass
+      });
+    }catch(err){
+      const msg = err?.message || String(err);
+      toast(msg, 'error');
+      return;
+    }
     toast("Perfil actualizado","ok"); closeDialog(dlg);
     const { data: { user: user2 } } = await sb.auth.getUser();
     const displayName2 = (user2 && user2.user_metadata && (user2.user_metadata.full_name || user2.user_metadata.name)) || full_name;
@@ -958,7 +1893,7 @@ async function loadClientsList(){
       <td>${c.contact_name||""}</td>
       <td>${c.contact_email ? `<i data-lucide="mail"></i> ${c.contact_email}` : ""}</td>
       <td>${c.phone ? `<i data-lucide="phone"></i> ${c.phone}` : ""}</td>
-      <td>${c.created_at ? dayjs(c.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
+      <td>${c.created_at ? formatDateTimeBogota(c.created_at) : ''}</td>
       <td>
         <button class="btn btn-ghost small" title="Editar" data-edit-client="${c.id}"><i data-lucide="pencil"></i></button>
         <button class="btn btn-ghost small" title="Eliminar" data-delete-client="${c.id}"><i data-lucide="trash-2"></i></button>
@@ -971,21 +1906,43 @@ async function loadClientsList(){
 }
 
 async function loadJobsTable(){
+  const tbody = document.getElementById("jobs-tbody");
+  const hint = document.getElementById('jobs-hint');
+  if(!tbody) return;
+  if(hint) hint.textContent = 'Cargando trabajos…';
   const { data, error } = await sb
     .from("jobs_view")
     .select("*")
     .neq("status","archived")
     .order("created_at", { ascending:false });
-  if(error){ toast(error.message, "error"); return; }
-  const tbody = document.getElementById("jobs-tbody");
-  if(!tbody) return;
+  if(error){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = error.message;
+    toast(error.message, "error");
+    return;
+  }
+  updateJobMetricsFromRows(data);
+  const metricsEnabled = jobMetricsSupport;
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
-  const rows = (data||[]).filter(j=>{
+  const filtered = (data||[]).filter(j=>{
     if(!q) return true;
     return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
-  }).map(j=>{
+  });
+  const rows = filtered.map(j=>{
     const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
-    const eta = j.due_at ? dayjs(j.due_at).format('DD/MM HH:mm') : '';
+    const eta = j.due_at ? formatDateTimeBogota(j.due_at) : '';
+    let budget = '—';
+    let actual = '—';
+    let hoursCell = '—';
+    if(metricsEnabled){
+      budget = formatCurrencyCOP(j.presupuesto);
+      const actualMoney = formatCurrencyCOP(j.costo_real);
+      const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
+      actual = `${actualMoney}<br>${deltaBudget}`;
+      const hoursLabel = `Real ${formatHoursValue(j.horas_reales)} · Est. ${formatHoursValue(j.horas_estimadas)}`;
+      const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+      hoursCell = `<span class="hours-chip">${hoursLabel}</span><br>${deltaHours}`;
+    }
     return `
       <tr>
         <td>${j.title}</td>
@@ -993,6 +1950,9 @@ async function loadJobsTable(){
         <td>${catPill(j.category)}</td>
         <td><span class="pill">${statusLabel}</span></td>
         <td class="progress-cell"><div class="progress"><span style="width:${j.progress||0}%"></span></div></td>
+        <td class="job-metrics-col">${budget}</td>
+        <td class="job-metrics-col">${actual}</td>
+        <td class="job-metrics-col">${hoursCell}</td>
         <td>${eta}</td>
         <td>
           <button class="btn btn-ghost small" title="Abrir" data-open-job="${j.id}"><i data-lucide="external-link"></i></button>
@@ -1003,79 +1963,324 @@ async function loadJobsTable(){
     `;
   }).join("");
   tbody.innerHTML = rows;
+  if(hint){
+    hint.textContent = filtered.length ? 'Trabajos activos ordenados por fecha.' : 'Sin trabajos activos para mostrar.';
+  }
   lucide.createIcons();
   attachJobsTableHandlers();
 }
 
-// ---------- Usuarios (solo admin ve todos) ----------
+async function loadArchivedJobsTable(){
+  const tbody = document.getElementById('jobs-archived-tbody');
+  const hint = document.getElementById('jobs-archived-hint');
+  if(!tbody) return;
+  if(hint) hint.textContent = 'Cargando archivados…';
+  const { data, error } = await sb
+    .from('jobs_view')
+    .select('*')
+    .eq('status', 'archived')
+    .order('created_at', { ascending:false });
+  if(error){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = error.message || 'No fue posible cargar los trabajos archivados.';
+    toast(error.message || 'No fue posible cargar los trabajos archivados.', 'error');
+    return;
+  }
+  updateJobMetricsFromRows(data);
+  const metricsEnabled = jobMetricsSupport;
+  const rowsData = (data || []).slice().sort((a,b)=>{
+    const aKey = a.archived_at || a.updated_at || a.created_at || '';
+    const bKey = b.archived_at || b.updated_at || b.created_at || '';
+    if(!aKey && !bKey) return 0;
+    if(!aKey) return 1;
+    if(!bKey) return -1;
+    return new Date(bKey).getTime() - new Date(aKey).getTime();
+  });
+  const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
+  const filtered = rowsData.filter(j=>{
+    if(!q) return true;
+    return [j.title, j.client_name, j.category].join(' ').toLowerCase().includes(q);
+  });
+  const rows = filtered.map(j=>{
+    const archivedAt = j.archived_at || j.updated_at || j.created_at;
+    const when = archivedAt ? formatDateTimeBogota(archivedAt) : '';
+    const budget = metricsEnabled ? formatCurrencyCOP(j.presupuesto) : '—';
+    const actual = metricsEnabled ? formatCurrencyCOP(j.costo_real) : '—';
+    const hoursReal = metricsEnabled ? formatHoursValue(j.horas_reales) : '—';
+    return `
+      <tr>
+        <td>${j.title}</td>
+        <td>${j.client_name||''}</td>
+        <td>${catPill(j.category)}</td>
+        <td class="job-metrics-col">${budget}</td>
+        <td class="job-metrics-col">${actual}</td>
+        <td class="job-metrics-col">${hoursReal}</td>
+        <td>${when}</td>
+      </tr>
+    `;
+  }).join('');
+  tbody.innerHTML = rows;
+  if(hint){
+    hint.textContent = filtered.length ? 'Historial de trabajos archivados.' : 'Sin trabajos archivados.';
+  }
+}
+
+// ---------- Empleados (solo admin ve todos) ----------
+function rolePriority(role){
+  return ROLE_PRIORITY[role] ?? 2;
+}
+
 async function loadUsersList(){
   const tbody = document.getElementById('users-tbody');
   const hint = document.getElementById('users-hint');
   if(!tbody) return;
-  const me = await getMe();
+  let me = null;
+  try{ me = await getMe(); }catch(e){}
   const manager = me && isManager(me.role);
+  canManageUsers = !!manager;
   const q = (document.getElementById('users-search')?.value || '').toLowerCase();
   let records = [];
   let hintMsg = '';
-  if(manager){
-    const { data, error } = await sb
-      .from('profiles')
-      .select('full_name,role,numero_telefono,created_at')
-      .order('created_at',{ascending:false});
-    if(error){ tbody.innerHTML=''; if(hint) hint.textContent = error.message; return; }
-    records = data || [];
-  }else{
-    const unique = new Map();
-    if(me && me.id){ unique.set(me.id, me); }
-    try{
-      const { data: managers, error } = await sb
+  let allowBlocking = false;
+  try{
+    if(manager){
+      let query = sb
         .from('profiles')
-        .select('id,full_name,role,numero_telefono,created_at')
-        .in('role', Array.from(MANAGER_ROLES))
+        .select('*')
+        .order('created_at',{ascending:false});
+      if(me && me.role === 'Administrador') query = query.neq('role','CEO');
+      const { data, error } = await query;
+      if(error) throw error;
+      records = data || [];
+    }else{
+      const { data, error } = await sb
+        .from('profiles')
+        .select('*')
+        .neq('role','CEO')
+        .neq('role','Administrador')
         .order('created_at',{ascending:false});
       if(error) throw error;
-      (managers || []).forEach(u=>{ if(u && u.id && !unique.has(u.id)) unique.set(u.id, u); });
-    }catch(e){ hintMsg = e.message || ''; }
-    records = Array.from(unique.values());
-    if(!hintMsg) hintMsg = 'Solo los administradores y CEO pueden ver todos los usuarios.';
+      records = data || [];
+      hintMsg = 'Solo ves a los empleados operativos.';
+    }
+    allowBlocking = (records||[]).some(row=> Object.prototype.hasOwnProperty.call(row || {}, 'is_blocked'));
+    supportsBlocking = allowBlocking;
+    if(manager){
+      hintMsg = allowBlocking
+        ? 'Puedes editar, bloquear o eliminar desde las acciones.'
+        : 'Puedes editar o eliminar desde las acciones.';
+    }
+  }catch(err){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = err?.message || 'No fue posible cargar los empleados.';
+    return;
   }
 
-  records = (records || []).slice().sort((a,b)=>{
+  const unique = new Map();
+  (records||[]).forEach(u=>{ if(u && u.id && !unique.has(u.id)) unique.set(u.id, u); });
+  if(me && me.id && !unique.has(me.id)) unique.set(me.id, me);
+  records = Array.from(unique.values());
+
+  records = records.slice().sort((a,b)=>{
+    const aRole = rolePriority(a?.role);
+    const bRole = rolePriority(b?.role);
+    if(aRole !== bRole) return aRole - bRole;
+    const aName = (a?.full_name || '').toLowerCase();
+    const bName = (b?.full_name || '').toLowerCase();
+    if(aName && bName && aName !== bName) return aName.localeCompare(bName, 'es', { sensitivity:'base' });
     const aDate = a && a.created_at ? new Date(a.created_at).getTime() : 0;
     const bDate = b && b.created_at ? new Date(b.created_at).getTime() : 0;
     return bDate - aDate;
   });
 
-  const rows = records.filter(u=>{
+  const filtered = records.filter(u=>{
     if(!q) return true;
     return [u.full_name||'', u.role||'', u.numero_telefono||''].join(' ').toLowerCase().includes(q);
-  }).map(u=>`
-    <tr>
-      <td>${u.full_name||''}</td>
-      <td>${u.role||''}</td>
-      <td>${u.numero_telefono||''}</td>
-      <td>${u.created_at ? dayjs(u.created_at).format('DD/MM/YYYY HH:mm') : ''}</td>
-    </tr>
-  `).join('');
+  });
+  const rows = filtered.map(u=>{
+    const blocked = allowBlocking && !!u.is_blocked;
+    const rowClass = blocked ? ' class="is-blocked"' : '';
+    const blockedTag = blocked ? '<small class="blocked-label">Bloqueado</small>' : '';
+    const isSelf = me && u && u.id === me.id;
+    const manageable = manager && u && u.id && (me?.role === 'CEO' || u.role !== 'CEO');
+    const editBtn = manageable
+      ? `<button class="btn btn-ghost small" title="Editar empleado" data-edit-user="${u.id}"><i data-lucide="pencil"></i></button>`
+      : '';
+    const blockAction = blocked ? 'unblock' : 'block';
+    const blockIcon = blocked ? 'user-check' : 'user-x';
+    const blockTitle = blocked ? 'Desbloquear empleado' : 'Bloquear empleado';
+    const blockBtn = (allowBlocking && manageable && !isSelf)
+      ? `<button class="btn btn-ghost small" title="${blockTitle}" data-block-user="${u.id}" data-block-action="${blockAction}"><i data-lucide="${blockIcon}"></i></button>`
+      : '';
+    const deleteBtn = (manageable && !isSelf)
+      ? `<button class="btn btn-ghost small" title="Eliminar empleado" data-delete-user="${u.id}"><i data-lucide="trash-2"></i></button>`
+      : '';
+    const actions = manageable ? [editBtn, blockBtn, deleteBtn].filter(Boolean).join('') : '';
+    return `
+      <tr${rowClass}>
+        <td>${u.full_name||''}${blockedTag}</td>
+        <td>${u.role||''}</td>
+        <td>${u.numero_telefono||''}</td>
+        <td>${u.created_at ? formatDateTimeBogota(u.created_at) : ''}</td>
+        <td class="actions-cell">${actions}</td>
+      </tr>
+    `;
+  }).join('');
   tbody.innerHTML = rows;
-  if(hint) hint.textContent = hintMsg;
+  const thActions = document.querySelector('[data-users-actions]');
+  if(thActions){ thActions.style.display = manager ? '' : 'none'; }
+  if(!manager){
+    tbody.querySelectorAll('.actions-cell').forEach(td=>{ td.style.display='none'; });
+  }else{
+    tbody.querySelectorAll('.actions-cell').forEach(td=>{ td.style.display=''; });
+  }
+  if(hint){
+    let finalHint = hintMsg;
+    if(!filtered.length){
+      finalHint = q
+        ? 'Sin coincidencias para la búsqueda actual.'
+        : (hintMsg || 'Aún no hay empleados registrados.');
+    }else if(manager){
+      finalHint = allowBlocking
+        ? 'Gestiona (editar/bloquear/eliminar) desde la columna de acciones.'
+        : 'Gestiona (editar/eliminar) desde la columna de acciones.';
+    }
+    hint.textContent = finalHint;
+  }
+  lucide.createIcons();
+  if(manager) attachUsersTableHandlers();
 }
 
 const $usersSearch = document.getElementById('users-search');
 if($usersSearch) $usersSearch.oninput = ()=> loadUsersList();
 const $btnRefUsers = document.getElementById('btn-refresh-users');
 if($btnRefUsers) $btnRefUsers.onclick = ()=> loadUsersList();
+function initTaskGlobalControls(){
+  const now = new Date();
+  if($taskGlobalDate && !$taskGlobalDate.value){
+    $taskGlobalDate.value = formatForDateInput(now);
+  }
+  if($taskGlobalTime && !$taskGlobalTime.value){
+    $taskGlobalTime.value = formatForTimeInput(now);
+  }
+  const handler = ()=> loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
+  if($taskGlobalDate) $taskGlobalDate.onchange = handler;
+  if($taskGlobalTime) $taskGlobalTime.onchange = handler;
+  if($taskGlobalFilter) $taskGlobalFilter.onchange = handler;
+}
+try{ initTaskGlobalControls(); }catch(e){}
 
 // Buscadores
 const $clientsSearch = document.getElementById('clients-search');
 if($clientsSearch) $clientsSearch.oninput = ()=> loadClientsList();
 const $jobsSearch = document.getElementById('jobs-search');
-if($jobsSearch) $jobsSearch.oninput = ()=> loadJobsTable();
+if($jobsSearch) $jobsSearch.oninput = ()=>{ loadJobsTable(); loadArchivedJobsTable(); };
 
 // Handlers de acciones en tablas
 function attachClientsTableHandlers(){
   document.querySelectorAll('[data-edit-client]').forEach(b=> b.onclick = ()=> openEditClientModal(b.dataset.editClient));
   document.querySelectorAll('[data-delete-client]').forEach(b=> b.onclick = ()=> deleteClient(b.dataset.deleteClient));
+}
+function attachUsersTableHandlers(){
+  document.querySelectorAll('[data-edit-user]').forEach(b=>{
+    b.onclick = ()=> openEditUserModal(b.dataset.editUser);
+  });
+  if(supportsBlocking){
+    document.querySelectorAll('[data-block-user]').forEach(b=>{
+      b.onclick = ()=> toggleUserBlock(b.dataset.blockUser, b.dataset.blockAction);
+    });
+  }
+  document.querySelectorAll('[data-delete-user]').forEach(b=>{
+    b.onclick = ()=> deleteUser(b.dataset.deleteUser);
+  });
+}
+
+async function toggleUserBlock(id, action){
+  if(!supportsBlocking){ toast('El bloqueo de empleados no está disponible en este momento.','error'); return; }
+  if(!canManageUsers){ toast('No tienes permisos para gestionar empleados.','error'); return; }
+  if(!id){ toast('Empleado no válido.','error'); return; }
+  const block = action === 'block';
+  try{ showLoading(block ? 'Bloqueando empleado…' : 'Reactivando empleado…'); }catch(e){}
+  let finalError = null;
+  try{
+    const payload = { is_blocked: block };
+    if(block){ payload.blocked_at = new Date().toISOString(); }
+    else { payload.blocked_at = null; }
+    let { error } = await sb.from('profiles').update(payload).eq('id', id);
+    if(error && error.message && error.message.toLowerCase().includes('blocked_at')){
+      const { error: fallback } = await sb.from('profiles').update({ is_blocked: block }).eq('id', id);
+      error = fallback;
+    }
+    if(error) finalError = error;
+  }catch(err){ finalError = err; }
+  hideLoading();
+  if(finalError){ toast(finalError.message || 'No fue posible actualizar el estado.','error'); return; }
+  toast(block ? 'Empleado bloqueado.' : 'Empleado habilitado.','ok');
+  await loadUsersList();
+  await loadUsersIntoSelect();
+}
+
+async function deleteUser(id){
+  if(!canManageUsers){ toast('No tienes permisos para gestionar empleados.','error'); return; }
+  if(!id){ toast('Empleado no válido.','error'); return; }
+  if(!confirm('¿Eliminar este empleado? Esta acción es permanente.')) return;
+  try{ showLoading('Eliminando empleado…'); }catch(e){}
+  const { error } = await sb.from('profiles').delete().eq('id', id);
+  hideLoading();
+  if(error){ toast(error.message,'error'); return; }
+  toast('Empleado eliminado.','ok');
+  await loadUsersList();
+  await loadUsersIntoSelect();
+}
+function updateEditUserAvatarPreview(url){
+  if(!$editUserAvatarPreview) return;
+  const safe = (url || '').trim();
+  if(safe){
+    $editUserAvatarPreview.onerror = ()=>{
+      $editUserAvatarPreview.onerror = null;
+      $editUserAvatarPreview.src = './assets/logo.png';
+    };
+    $editUserAvatarPreview.src = safe;
+  }else{
+    $editUserAvatarPreview.onerror = null;
+    $editUserAvatarPreview.src = './assets/logo.png';
+  }
+}
+async function openEditUserModal(id){
+  if(!canManageUsers){ toast('No tienes permisos para editar usuarios.','error'); return; }
+  if(!id){ toast('Usuario no válido.','error'); return; }
+  let user = null;
+  try{
+    const { data, error, status } = await sb
+      .from('profiles')
+      .select('id,full_name,role,numero_telefono,avatar_url')
+      .eq('id', id)
+      .maybeSingle();
+    if(error && status !== 406) throw error;
+    if(status === 406 || !data){
+      user = null;
+    }else{
+      user = data;
+    }
+  }catch(err){
+    toast(err?.message || 'No fue posible cargar el usuario.','error');
+    return;
+  }
+  if(!user){ toast('Usuario no encontrado.','error'); return; }
+  if($editUserId) $editUserId.value = user.id || '';
+  if($editUserName) $editUserName.value = user.full_name || '';
+  if($editUserRole){
+    const desiredRole = user.role && Array.from($editUserRole.options).some(opt=> opt.value === user.role)
+      ? user.role
+      : DEFAULT_ROLE;
+    $editUserRole.value = desiredRole;
+  }
+  if($editUserPhone) $editUserPhone.value = user.numero_telefono || '';
+  if($editUserAvatar){
+    $editUserAvatar.value = user.avatar_url || '';
+    updateEditUserAvatarPreview(user.avatar_url || '');
+  }
+  if(modalEditUser) openDialog(modalEditUser);
 }
 async function openEditClientModal(id){
   const { data, error } = await sb.from('clients').select('*').eq('id', id).single();
@@ -1114,6 +2319,8 @@ function attachJobsTableHandlers(){
 async function openEditJobModal(id){
   const { data, error } = await sb.from('jobs').select('*').eq('id', id).single();
   if(error){ toast(error.message,'error'); return; }
+  updateJobMetricsFromRows([data]);
+  const metricsEnabled = jobMetricsSupport;
   document.getElementById('edit-job-id').value = data.id;
   document.getElementById('edit-job-title').value = data.title||'';
   document.getElementById('edit-job-category').value = data.category||'web';
@@ -1122,6 +2329,18 @@ async function openEditJobModal(id){
   document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
   document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
   document.getElementById('edit-job-desc').value = data.description||'';
+  const $budget = document.getElementById('edit-job-budget');
+  if($budget){
+    $budget.value = metricsEnabled ? (data.presupuesto ?? '') : '';
+    if(metricsEnabled) applyMoneyFormatting($budget);
+  }
+  const $actual = document.getElementById('edit-job-actual-cost');
+  if($actual){
+    $actual.value = metricsEnabled ? (data.costo_real ?? '') : '';
+    if(metricsEnabled) applyMoneyFormatting($actual);
+  }
+  document.getElementById('edit-job-hours-estimated').value = metricsEnabled ? (data.horas_estimadas ?? '') : '';
+  document.getElementById('edit-job-hours-real').value = metricsEnabled ? (data.horas_reales ?? '') : '';
   openDialog(document.getElementById('modal-edit-job'));
 }
 async function archiveJob(id){
@@ -1129,13 +2348,15 @@ async function archiveJob(id){
   const { error } = await sb.from('jobs').update({ status:'archived' }).eq('id', id);
   if(error){ toast(error.message,'error'); return; }
   toast('Trabajo archivado','ok');
-  await loadJobsTable(); await loadJobs(); await updateStats();
+  await loadJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
 }
 
 // Botones de refresco
 const $btnRefClients = document.getElementById('btn-refresh-clients');
 if($btnRefClients) $btnRefClients.onclick = ()=> loadClientsList();
 const $btnRefJobs = document.getElementById('btn-refresh-jobs');
-if($btnRefJobs) $btnRefJobs.onclick = ()=> loadJobsTable();
+if($btnRefJobs) $btnRefJobs.onclick = ()=>{ loadJobsTable(); loadArchivedJobsTable(); };
+const $btnRefArchivedJobs = document.getElementById('btn-refresh-archived-jobs');
+if($btnRefArchivedJobs) $btnRefArchivedJobs.onclick = ()=> loadArchivedJobsTable();
 const $btnRefKanban = document.getElementById('btn-refresh-kanban');
 if($btnRefKanban) $btnRefKanban.onclick = async ()=>{ await loadKanban(); await loadJobProgressChart(); };
