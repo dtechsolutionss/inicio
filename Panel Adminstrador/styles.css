@@ -222,6 +222,8 @@ textarea{resize:vertical}
 
 .modal{border:none; padding:0; background:transparent}
 .modal[open]::backdrop{background:rgba(15,23,42,.45)}
+.modal.modal-boot:focus{outline:none}
+.modal.modal-boot:focus-visible{outline:none}
 .modal-content{
   width:min(680px, 92vw); background:#ffffff; border:1px solid #e5e7eb; border-radius:20px; padding:16px; box-shadow:var(--shadow);
 }
