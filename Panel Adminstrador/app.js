@@ -345,6 +345,46 @@ async function ensureProfile(){
     await sb.from("profiles").insert({ id:user.id, full_name, role: DEFAULT_ROLE });
   }
 }
+
+async function saveProfileChanges({
+  id,
+  full_name,
+  role,
+  numero_telefono,
+  avatar_url,
+  syncAuth = false,
+  authUser = null,
+  emailNew = '',
+  newPassword = ''
+}){
+  if(!id) throw new Error('Usuario no válido.');
+  const payload = {
+    full_name: full_name || null,
+    numero_telefono: numero_telefono || null,
+    avatar_url: avatar_url || null,
+  };
+  if(typeof role !== 'undefined'){
+    payload.role = role || DEFAULT_ROLE;
+  }
+  const { data, error } = await sb
+    .from('profiles')
+    .update(payload)
+    .eq('id', id)
+    .select('id,full_name,role,numero_telefono,avatar_url')
+    .maybeSingle();
+  if(error) throw error;
+  if(syncAuth){
+    const user = authUser || (await sb.auth.getUser()).data?.user;
+    if(user && user.id === id){
+      const authPayload = { data: { full_name, phone: numero_telefono || null } };
+      if(newPassword) authPayload.password = newPassword;
+      if(emailNew && emailNew !== user.email) authPayload.email = emailNew;
+      const { error: authError } = await sb.auth.updateUser(authPayload);
+      if(authError) throw authError;
+    }
+  }
+  return data;
+}
 async function getMe(){
   const { data: { user } } = await sb.auth.getUser();
   const { data } = await sb.from("profiles").select("*").eq("id", user.id).single();
@@ -1021,18 +1061,28 @@ if($btnSaveEditUser){
     const numero_telefono = ($editUserPhone?.value || '').trim();
     const avatar_url = ($editUserAvatar?.value || '').trim();
     try{ showLoading('Actualizando usuario…','Guardando cambios'); }catch(e){}
-    const { error } = await sb.from('profiles').update({
-      full_name: full_name || null,
-      role,
-      numero_telefono: numero_telefono || null,
-      avatar_url: avatar_url || null,
-    }).eq('id', id);
+    try{
+      await saveProfileChanges({
+        id,
+        full_name,
+        role,
+        numero_telefono,
+        avatar_url
+      });
+    }catch(err){
+      hideLoading();
+      const msg = err?.message || String(err);
+      toast(msg, 'error');
+      return;
+    }
     hideLoading();
-    if(error){ toast(error.message,'error'); return; }
     toast('Usuario actualizado','ok');
     if(modalEditUser) closeDialog(modalEditUser);
     await loadUsersList();
-    await updateBrandValues();
+    try{
+      const { data: { user } } = await sb.auth.getUser();
+      if(user && user.id === id){ await updateBrandValues(); }
+    }catch(e){}
   };
 }
 
@@ -1187,17 +1237,22 @@ function bindProfileModal(me){
       if(newPass !== newPass2){ toast("Las contraseñas no coinciden","error"); return; }
     }
     const { data: { user } } = await sb.auth.getUser();
-    // Actualizar perfil (nombre) para sincronizar vistas y asignaciones
-    const { error: e1 } = await sb.from("profiles").update({ full_name, avatar_url, numero_telefono: (phone || null) }).eq("id", user.id);
-    if(e1){ toast(e1.message,"error"); return; }
-    // Actualizar metadata del usuario (teléfono) y contraseña opcional
     try{
-      const payload = { data: { phone: phone || null, full_name } };
-      if(newPass) payload.password = newPass;
-      if(emailNew && emailNew !== user.email) payload.email = emailNew;
-      const { error: e2 } = await sb.auth.updateUser(payload);
-      if(e2){ toast(e2.message,'error'); return; }
-    }catch(err){ toast(String(err),'error'); return; }
+      await saveProfileChanges({
+        id: user.id,
+        full_name,
+        numero_telefono: phone,
+        avatar_url,
+        syncAuth: true,
+        authUser: user,
+        emailNew,
+        newPassword: newPass
+      });
+    }catch(err){
+      const msg = err?.message || String(err);
+      toast(msg, 'error');
+      return;
+    }
     toast("Perfil actualizado","ok"); closeDialog(dlg);
     const { data: { user: user2 } } = await sb.auth.getUser();
     const displayName2 = (user2 && user2.user_metadata && (user2.user_metadata.full_name || user2.user_metadata.name)) || full_name;
