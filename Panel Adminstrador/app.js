@@ -51,9 +51,7 @@ const ROLE_PRIORITY = { CEO:0, Administrador:1 };
 const BOGOTA_TZ = 'America/Bogota';
 
 let canManageUsers = false;
-let supportsBlocking = true;
-let cachedBlockingError = false;
-let archivedJobsOrderColumn = null;
+let supportsBlocking = false;
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
@@ -1352,39 +1350,27 @@ async function loadArchivedJobsTable(){
   const hint = document.getElementById('jobs-archived-hint');
   if(!tbody) return;
   if(hint) hint.textContent = 'Cargando archivados…';
-  const baseCandidates = archivedJobsOrderColumn ? [archivedJobsOrderColumn, 'archived_at', 'created_at'] : ['archived_at', 'updated_at', 'created_at'];
-  const candidates = [...new Set(baseCandidates)];
-  let data = null;
-  let finalError = null;
-  let chosen = archivedJobsOrderColumn || null;
-  for(const col of candidates){
-    const orderCol = col;
-    try{
-      const response = await sb
-        .from('jobs_view')
-        .select('*')
-        .eq('status', 'archived')
-        .order(orderCol, { ascending:false });
-      if(response.error){
-        finalError = response.error;
-        continue;
-      }
-      data = response.data || [];
-      chosen = orderCol;
-      break;
-    }catch(err){
-      finalError = err;
-    }
-  }
-  if(!data){
+  const { data, error } = await sb
+    .from('jobs_view')
+    .select('*')
+    .eq('status', 'archived')
+    .order('created_at', { ascending:false });
+  if(error){
     tbody.innerHTML = '';
-    if(hint) hint.textContent = finalError?.message || 'No fue posible cargar los trabajos archivados.';
-    toast(finalError?.message || 'No fue posible cargar los trabajos archivados.', 'error');
+    if(hint) hint.textContent = error.message || 'No fue posible cargar los trabajos archivados.';
+    toast(error.message || 'No fue posible cargar los trabajos archivados.', 'error');
     return;
   }
-  archivedJobsOrderColumn = chosen || archivedJobsOrderColumn;
+  const rowsData = (data || []).slice().sort((a,b)=>{
+    const aKey = a.archived_at || a.updated_at || a.created_at || '';
+    const bKey = b.archived_at || b.updated_at || b.created_at || '';
+    if(!aKey && !bKey) return 0;
+    if(!aKey) return 1;
+    if(!bKey) return -1;
+    return new Date(bKey).getTime() - new Date(aKey).getTime();
+  });
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
-  const filtered = (data||[]).filter(j=>{
+  const filtered = rowsData.filter(j=>{
     if(!q) return true;
     return [j.title, j.client_name, j.category].join(' ').toLowerCase().includes(q);
   });
@@ -1422,26 +1408,21 @@ async function loadUsersList(){
   const q = (document.getElementById('users-search')?.value || '').toLowerCase();
   let records = [];
   let hintMsg = '';
-  const cols = supportsBlocking
-    ? 'id,full_name,role,numero_telefono,created_at,avatar_url,is_blocked,blocked_at'
-    : 'id,full_name,role,numero_telefono,created_at,avatar_url';
+  let allowBlocking = false;
   try{
     if(manager){
       let query = sb
         .from('profiles')
-        .select(cols)
+        .select('*')
         .order('created_at',{ascending:false});
       if(me && me.role === 'Administrador') query = query.neq('role','CEO');
       const { data, error } = await query;
       if(error) throw error;
       records = data || [];
-      hintMsg = supportsBlocking
-        ? 'Puedes editar, bloquear o eliminar desde las acciones.'
-        : 'Puedes editar o eliminar desde las acciones.';
     }else{
       const { data, error } = await sb
         .from('profiles')
-        .select(cols)
+        .select('*')
         .neq('role','CEO')
         .neq('role','Administrador')
         .order('created_at',{ascending:false});
@@ -1449,13 +1430,14 @@ async function loadUsersList(){
       records = data || [];
       hintMsg = 'Solo ves a los empleados operativos.';
     }
-  }catch(err){
-    if(supportsBlocking && !cachedBlockingError && err?.message && err.message.toLowerCase().includes('is_blocked')){
-      supportsBlocking = false;
-      cachedBlockingError = true;
-      await loadUsersList();
-      return;
+    allowBlocking = (records||[]).some(row=> Object.prototype.hasOwnProperty.call(row || {}, 'is_blocked'));
+    supportsBlocking = allowBlocking;
+    if(manager){
+      hintMsg = allowBlocking
+        ? 'Puedes editar, bloquear o eliminar desde las acciones.'
+        : 'Puedes editar o eliminar desde las acciones.';
     }
+  }catch(err){
     tbody.innerHTML = '';
     if(hint) hint.textContent = err?.message || 'No fue posible cargar los empleados.';
     return;
@@ -1483,17 +1465,18 @@ async function loadUsersList(){
     return [u.full_name||'', u.role||'', u.numero_telefono||''].join(' ').toLowerCase().includes(q);
   });
   const rows = filtered.map(u=>{
-    const rowClass = u.is_blocked ? ' class="is-blocked"' : '';
-    const blockedTag = u.is_blocked ? '<small class="blocked-label">Bloqueado</small>' : '';
+    const blocked = allowBlocking && !!u.is_blocked;
+    const rowClass = blocked ? ' class="is-blocked"' : '';
+    const blockedTag = blocked ? '<small class="blocked-label">Bloqueado</small>' : '';
     const isSelf = me && u && u.id === me.id;
     const manageable = manager && u && u.id && (me?.role === 'CEO' || u.role !== 'CEO');
     const editBtn = manageable
       ? `<button class="btn btn-ghost small" title="Editar empleado" data-edit-user="${u.id}"><i data-lucide="pencil"></i></button>`
       : '';
-    const blockAction = u.is_blocked ? 'unblock' : 'block';
-    const blockIcon = u.is_blocked ? 'user-check' : 'user-x';
-    const blockTitle = u.is_blocked ? 'Desbloquear empleado' : 'Bloquear empleado';
-    const blockBtn = (supportsBlocking && manageable && !isSelf)
+    const blockAction = blocked ? 'unblock' : 'block';
+    const blockIcon = blocked ? 'user-check' : 'user-x';
+    const blockTitle = blocked ? 'Desbloquear empleado' : 'Bloquear empleado';
+    const blockBtn = (allowBlocking && manageable && !isSelf)
       ? `<button class="btn btn-ghost small" title="${blockTitle}" data-block-user="${u.id}" data-block-action="${blockAction}"><i data-lucide="${blockIcon}"></i></button>`
       : '';
     const deleteBtn = (manageable && !isSelf)
@@ -1525,7 +1508,7 @@ async function loadUsersList(){
         ? 'Sin coincidencias para la búsqueda actual.'
         : (hintMsg || 'Aún no hay empleados registrados.');
     }else if(manager){
-      finalHint = supportsBlocking
+      finalHint = allowBlocking
         ? 'Gestiona (editar/bloquear/eliminar) desde la columna de acciones.'
         : 'Gestiona (editar/eliminar) desde la columna de acciones.';
     }
@@ -1635,13 +1618,17 @@ async function openEditUserModal(id){
   if(!id){ toast('Usuario no válido.','error'); return; }
   let user = null;
   try{
-    const { data, error } = await sb
+    const { data, error, status } = await sb
       .from('profiles')
       .select('id,full_name,role,numero_telefono,avatar_url')
       .eq('id', id)
       .maybeSingle();
-    if(error) throw error;
-    user = data;
+    if(error && status !== 406) throw error;
+    if(status === 406 || !data){
+      user = null;
+    }else{
+      user = data;
+    }
   }catch(err){
     toast(err?.message || 'No fue posible cargar el usuario.','error');
     return;
