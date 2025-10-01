@@ -50,6 +50,7 @@ const MANAGER_ROLES = new Set(["CEO", "Administrador"]);
 const DEFAULT_ROLE = "Tecnico";
 const ROLE_PRIORITY = { CEO:0, Administrador:1 };
 const BOGOTA_TZ = 'America/Bogota';
+const copFormatter = new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 });
 
 let canManageUsers = false;
 let supportsBlocking = false;
@@ -86,6 +87,62 @@ function formatDateTimeBogota(value, includeTime = true){
   if(!includeTime) return dateStr;
   if(!parts.hour || !parts.minute) return dateStr;
   return `${dateStr} ${parts.hour}:${parts.minute}`;
+}
+
+function formatCurrencyCOP(value){
+  if(value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if(Number.isNaN(num)) return '—';
+  return copFormatter.format(num);
+}
+
+function formatHoursValue(value){
+  if(value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if(Number.isNaN(num)) return '—';
+  return `${num.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h`;
+}
+
+function buildDeltaChip(current, reference, positiveIsGood = false){
+  if(current === null || current === undefined || current === '' || reference === null || reference === undefined || reference === ''){
+    return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  }
+  const curr = Number(current);
+  const ref = Number(reference);
+  if(Number.isNaN(curr) || Number.isNaN(ref)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  const delta = curr - ref;
+  if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">En presupuesto</span>';
+  const favorable = positiveIsGood ? delta >= 0 : delta <= 0;
+  const cls = favorable ? 'delta-positive' : 'delta-negative';
+  const label = copFormatter.format(Math.abs(delta));
+  const text = favorable ? `A favor ${label}` : `Sobrepasa ${label}`;
+  return `<span class="delta-chip ${cls}">${text}</span>`;
+}
+
+function buildHoursDelta(real, estimated){
+  if(real === null || real === undefined || real === '' || estimated === null || estimated === undefined || estimated === ''){
+    return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  }
+  const r = Number(real);
+  const e = Number(estimated);
+  if(Number.isNaN(r) || Number.isNaN(e)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
+  const delta = r - e;
+  if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">Dentro del plan</span>';
+  const favorable = delta <= 0;
+  const cls = favorable ? 'delta-positive' : 'delta-negative';
+  const label = `${Math.abs(delta).toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h`;
+  const text = favorable ? `Ahorro ${label}` : `Extra ${label}`;
+  return `<span class="delta-chip ${cls}">${text}</span>`;
+}
+
+function toNullableNumber(value){
+  if(value === null || value === undefined) return null;
+  if(typeof value === 'number'){ return Number.isNaN(value) ? null : value; }
+  const str = String(value).trim();
+  if(!str) return null;
+  const normalized = str.replace(',', '.');
+  const num = Number(normalized);
+  return Number.isNaN(num) ? null : num;
 }
 
 function getBogotaDateKey(value){
@@ -165,6 +222,12 @@ const $taskProgress = document.getElementById('task-progress');
 const $taskModalTitle = document.getElementById('task-modal-title');
 const $taskJob = document.getElementById('task-job');
 const $taskJobWrap = document.getElementById('task-job-wrap');
+const $taskHours = document.getElementById('task-hours');
+const $taskAttachmentsInput = document.getElementById('task-attachments');
+const $taskAttachmentsList = document.getElementById('task-attachments-list');
+const $taskDeliverableInput = document.getElementById('task-deliverable-input');
+const $taskDeliverablesList = document.getElementById('task-deliverables');
+const $btnAddDeliverable = document.getElementById('btn-add-deliverable');
 const $taskGlobalFilter = document.getElementById('task-global-filter');
 const $taskGlobalDate = document.getElementById('task-global-date');
 const $taskGlobalTime = document.getElementById('task-global-time');
@@ -434,16 +497,19 @@ async function loadMyUpcoming(){
   const box = document.getElementById('w-my-upcoming'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
   const me = await getMe();
-  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,created_at').eq('assignee', me.id).neq('status','done');
+  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,created_at,horas_invertidas').eq('assignee', me.id).neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
   const jobIds = [...new Set((tasks||[]).map(t=>t.job_id).filter(Boolean))];
   let jobsMap = {};
-  if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,title,due_at').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
+  if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,title,due_at,presupuesto,costo_real,horas_estimadas,horas_reales').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
   const rows = (tasks||[]).map(t=>({ t, j: jobsMap[t.job_id] })).filter(x=>x.j && x.j.due_at).sort((a,b)=> new Date(a.j.due_at)-new Date(b.j.due_at)).slice(0,6);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin próximas entregas</li>'; return; }
   box.innerHTML = rows.map(({t,j})=>{
     const due = formatDateTimeBogota(j.due_at);
-    return `<li><span>${t.title}</span><span class="meta">Entrega ${due}</span></li>`;
+    const logged = t.horas_invertidas ? ` · ${formatHoursValue(t.horas_invertidas)} registradas` : '';
+    const budgetChip = buildDeltaChip(j.costo_real, j.presupuesto);
+    const hoursDelta = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+    return `<li><span>${t.title}</span><span class="meta">Entrega ${due}${logged}<br>${budgetChip} ${hoursDelta}</span></li>`;
   }).join('');
 }
 
@@ -451,41 +517,69 @@ async function loadOverdue(){
   const box = document.getElementById('w-overdue'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
   const me = await getMe(); const manager = me && isManager(me.role);
-  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,assignee').neq('status','done');
+  const { data: tasks, error } = await sb.from('tasks').select('id,job_id,title,status,progress,assignee,horas_invertidas').neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
   const filtered = (tasks||[]).filter(t=> manager || t.assignee===me.id);
   const jobIds = [...new Set(filtered.map(t=>t.job_id).filter(Boolean))];
   let jobsMap = {};
-  if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,due_at').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
+  if(jobIds.length){ const { data: jobs } = await sb.from('jobs').select('id,due_at,presupuesto,costo_real,horas_estimadas,horas_reales').in('id', jobIds); (jobs||[]).forEach(j=> jobsMap[j.id]=j); }
   const now = new Date();
   const rows = filtered.map(t=>({ t, j:jobsMap[t.job_id] })).filter(x=>x.j && x.j.due_at && new Date(x.j.due_at) < now).sort((a,b)=> new Date(a.j.due_at)-new Date(b.j.due_at)).slice(0,6);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin vencidas</li>'; return; }
   box.innerHTML = rows.map(({t,j})=>{
     const due = formatDateTimeBogota(j.due_at);
-    return `<li><span>${t.title}</span><span class="meta">Venció ${due}</span></li>`;
+    const logged = t.horas_invertidas ? ` · ${formatHoursValue(t.horas_invertidas)} registradas` : '';
+    const budgetChip = buildDeltaChip(j.costo_real, j.presupuesto);
+    const hoursDelta = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+    return `<li><span>${t.title}</span><span class="meta">Venció ${due}${logged}<br>${budgetChip} ${hoursDelta}</span></li>`;
   }).join('');
 }
 
 async function loadWorkload(){
   const box = document.getElementById('w-workload'); if(!box) return;
   box.innerHTML = '<li class="meta">Cargando…</li>';
-  const { data: tasks, error } = await sb.from('tasks').select('assignee,status').neq('status','done');
+  const { data: tasks, error } = await sb.from('tasks').select('assignee,status,job_id,horas_invertidas').neq('status','done');
   if(error){ box.innerHTML = `<li class="meta">${error.message}</li>`; return; }
   const groups = {};
+  const jobIds = [...new Set((tasks||[]).map(t=> t.job_id).filter(Boolean))];
+  const jobsMap = {};
+  if(jobIds.length){
+    const { data: jobs } = await sb.from('jobs').select('id,presupuesto,costo_real,horas_estimadas,horas_reales').in('id', jobIds);
+    (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
+  }
   (tasks||[]).forEach(t=>{
     const k = t.assignee || 'sin';
-    groups[k] = groups[k] || { doing:0, review:0, todo:0, total:0 };
+    groups[k] = groups[k] || { doing:0, review:0, todo:0, total:0, hoursLogged:0, jobsSeen:new Set(), budgetPlanned:0, budgetActual:0, hoursEstimated:0, hoursReal:0 };
     if(t.status==='doing') groups[k].doing++;
     else if(t.status==='review') groups[k].review++;
     else if(t.status==='todo') groups[k].todo++;
     groups[k].total++;
+    const hoursTask = Number(t.horas_invertidas || 0);
+    if(!Number.isNaN(hoursTask)) groups[k].hoursLogged += hoursTask;
+    const job = jobsMap[t.job_id];
+    if(job && !groups[k].jobsSeen.has(job.id)){
+      groups[k].jobsSeen.add(job.id);
+      const planned = Number(job.presupuesto || 0);
+      const actual = Number(job.costo_real || 0);
+      if(!Number.isNaN(planned)) groups[k].budgetPlanned += planned;
+      if(!Number.isNaN(actual)) groups[k].budgetActual += actual;
+      const hEst = Number(job.horas_estimadas || 0);
+      const hReal = Number(job.horas_reales || 0);
+      if(!Number.isNaN(hEst)) groups[k].hoursEstimated += hEst;
+      if(!Number.isNaN(hReal)) groups[k].hoursReal += hReal;
+    }
   });
   const ids = Object.keys(groups).filter(k=> k!=='sin');
   let names = {};
   if(ids.length){ const { data: ppl } = await sb.from('profiles').select('id,full_name').in('id', ids); (ppl||[]).forEach(p=> names[p.id]=p.full_name); }
-  const rows = Object.entries(groups).map(([id,c])=>({ name: names[id] || (id==='sin'?'Sin asignar':'Usuario'), ...c })).sort((a,b)=> b.total-a.total).slice(0,8);
+  const rows = Object.entries(groups).map(([id,c])=>({ name: names[id] || (id==='sin'?'Sin asignar':'Usuario'), ...c, jobsSeen: undefined })).sort((a,b)=> b.total-a.total).slice(0,8);
   if(!rows.length){ box.innerHTML = '<li class="meta">Sin datos</li>'; return; }
-  box.innerHTML = rows.map(r=>`<li><span>${r.name}</span><span class="meta">En curso ${r.doing} · En revisión ${r.review} · Total ${r.total}</span></li>`).join('');
+  box.innerHTML = rows.map(r=>{
+    const budgetChip = buildDeltaChip(r.budgetActual, r.budgetPlanned);
+    const hoursDelta = (r.hoursEstimated || r.hoursReal) ? buildHoursDelta(r.hoursReal, r.hoursEstimated) : '<span class="delta-chip delta-neutral">Sin horas planificadas</span>';
+    const hoursLogged = r.hoursLogged ? `${r.hoursLogged.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h registradas` : 'Sin horas registradas';
+    return `<li><span>${r.name}</span><span class="meta">En curso ${r.doing} · En revisión ${r.review} · Total ${r.total}<br>${hoursLogged}<br>${budgetChip} ${hoursDelta}</span></li>`;
+  }).join('');
 }
 
 async function loadTaskGlobalList(mode = 'upcoming'){
@@ -534,12 +628,12 @@ async function loadTaskGlobalList(mode = 'upcoming'){
     }
 
     if(mode === 'team'){
-      const { data: tasks, error } = await sb.from('tasks').select('assignee,status,job_id').neq('status','done');
+      const { data: tasks, error } = await sb.from('tasks').select('assignee,status,job_id,horas_invertidas').neq('status','done');
       if(error) throw error;
       const jobIds = [...new Set((tasks||[]).map(t=> t.job_id).filter(Boolean))];
       const jobsMap = {};
       if(jobIds.length){
-        const { data: jobs } = await sb.from('jobs').select('id,due_at').in('id', jobIds);
+        const { data: jobs } = await sb.from('jobs').select('id,due_at,presupuesto,costo_real,horas_estimadas,horas_reales').in('id', jobIds);
         (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
       }
       const groups = {};
@@ -548,11 +642,25 @@ async function loadTaskGlobalList(mode = 'upcoming'){
         .filter(x=> x.job && x.job.due_at && getBogotaDateKey(x.job.due_at) === referenceDateKey)
         .forEach(({ task: t })=>{
         const key = t.assignee || 'sin';
-        groups[key] = groups[key] || { total:0, doing:0, review:0, todo:0 };
+        groups[key] = groups[key] || { total:0, doing:0, review:0, todo:0, hoursLogged:0, jobsSeen:new Set(), budgetPlanned:0, budgetActual:0, hoursEstimated:0, hoursReal:0 };
         if(t.status==='doing') groups[key].doing++;
         else if(t.status==='review') groups[key].review++;
         else if(t.status==='todo') groups[key].todo++;
         groups[key].total++;
+        const hoursTask = Number(t.horas_invertidas || 0);
+        if(!Number.isNaN(hoursTask)) groups[key].hoursLogged += hoursTask;
+        const job = jobsMap[t.job_id];
+        if(job && !groups[key].jobsSeen.has(job.id)){
+          groups[key].jobsSeen.add(job.id);
+          const planned = Number(job.presupuesto || 0);
+          const actual = Number(job.costo_real || 0);
+          if(!Number.isNaN(planned)) groups[key].budgetPlanned += planned;
+          if(!Number.isNaN(actual)) groups[key].budgetActual += actual;
+          const hEst = Number(job.horas_estimadas || 0);
+          const hReal = Number(job.horas_reales || 0);
+          if(!Number.isNaN(hEst)) groups[key].hoursEstimated += hEst;
+          if(!Number.isNaN(hReal)) groups[key].hoursReal += hReal;
+        }
       });
       const ids = Object.keys(groups).filter(k=> k !== 'sin' && k);
       const names = { sin: 'Sin asignar' };
@@ -563,18 +671,27 @@ async function loadTaskGlobalList(mode = 'upcoming'){
       const rows = Object.entries(groups).map(([id, stats])=>({
         id,
         name: names[id] || (id==='sin' ? 'Sin asignar' : 'Usuario'),
-        ...stats
+        ...stats,
+        jobsSeen: undefined
       })).sort((a,b)=> b.total - a.total).slice(0,8);
       if(!rows.length){ $taskGlobalList.innerHTML = '<li class="meta">Sin tareas activas.</li>'; return; }
-      $taskGlobalList.innerHTML = rows.map(r=>`
-        <li class="is-team"><span>${r.name}</span><span class="meta">Total ${r.total} · En curso ${r.doing} · Revisión ${r.review}</span></li>
-      `).join('');
+      $taskGlobalList.innerHTML = rows.map(r=>{
+        const budgetChip = buildDeltaChip(r.budgetActual, r.budgetPlanned);
+        const hoursDelta = (r.hoursEstimated || r.hoursReal) ? buildHoursDelta(r.hoursReal, r.hoursEstimated) : '<span class="delta-chip delta-neutral">Sin horas planificadas</span>';
+        const hoursLogged = r.hoursLogged ? `${r.hoursLogged.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h registradas` : 'Sin horas registradas';
+        return `
+          <li class="is-team">
+            <span>${r.name}</span>
+            <span class="meta">Tareas ${r.total} · En curso ${r.doing} · Revisión ${r.review}<br>${hoursLogged}<br>${budgetChip} ${hoursDelta}</span>
+          </li>
+        `;
+      }).join('');
       return;
     }
 
     if(!me){ $taskGlobalList.innerHTML = '<li class="meta">Inicia sesión para ver tus tareas.</li>'; return; }
     const { data: tasks, error } = await sb.from('tasks')
-      .select('id,title,status,progress,assignee,job_id')
+      .select('id,title,status,progress,assignee,job_id,horas_invertidas')
       .neq('status','done');
     if(error) throw error;
     const pool = (tasks||[]).filter(t=>{
@@ -585,7 +702,7 @@ async function loadTaskGlobalList(mode = 'upcoming'){
     const jobIds = [...new Set(pool.map(t=> t.job_id).filter(Boolean))];
     const jobsMap = {};
     if(jobIds.length){
-      const { data: jobs } = await sb.from('jobs').select('id,title,due_at').in('id', jobIds);
+      const { data: jobs } = await sb.from('jobs').select('id,title,due_at,presupuesto,costo_real,horas_estimadas,horas_reales').in('id', jobIds);
       (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
     }
     const annotated = pool.map(t=>({ t, job: jobsMap[t.job_id] })).filter(x=> x.job && x.job.due_at);
@@ -603,7 +720,10 @@ async function loadTaskGlobalList(mode = 'upcoming'){
       const due = job && job.due_at ? formatDateTimeBogota(job.due_at) : '';
       const cls = mode === 'overdue' ? 'is-overdue' : 'is-upcoming';
       const metaLabel = mode === 'overdue' ? `Venció ${due}` : `Entrega ${due}`;
-      return `<li class="${cls}"><span>${t.title || job?.title || 'Tarea'}</span><span class="meta">${metaLabel}</span></li>`;
+      const budgetChip = buildDeltaChip(job?.costo_real, job?.presupuesto);
+      const hoursDelta = buildHoursDelta(job?.horas_reales, job?.horas_estimadas);
+      const hoursLogged = t.horas_invertidas ? ` · Horas registradas ${formatHoursValue(t.horas_invertidas)}` : '';
+      return `<li class="${cls}"><span>${t.title || job?.title || 'Tarea'}</span><span class="meta">${metaLabel}${hoursLogged}<br>${budgetChip} ${hoursDelta}</span></li>`;
     }).join('');
   }catch(err){
     $taskGlobalList.innerHTML = `<li class="meta">${err?.message || 'No fue posible cargar la información.'}</li>`;
@@ -640,6 +760,176 @@ $search.oninput = ()=>{ filter.q = $search.value.trim(); loadJobs(); };
 
 // ---------- Jobs grid ----------
 let currentJob = null;
+const TASK_ATTACHMENTS_BUCKET = 'task-attachments';
+let currentTaskDeliverables = [];
+let currentTaskAttachments = [];
+
+function resetTaskModalExtras(){
+  currentTaskDeliverables = [];
+  currentTaskAttachments = [];
+  if($taskHours) $taskHours.value = '';
+  if($taskAttachmentsInput) $taskAttachmentsInput.value = '';
+  renderTaskDeliverables();
+  renderTaskAttachments();
+}
+
+if($btnAddDeliverable){
+  $btnAddDeliverable.onclick = ()=>{
+    const label = ($taskDeliverableInput?.value || '').trim();
+    if(!label){ toast('Escribe el nombre del entregable.','error'); return; }
+    currentTaskDeliverables.push({ label, done:false });
+    if($taskDeliverableInput) $taskDeliverableInput.value = '';
+    renderTaskDeliverables();
+  };
+}
+if($taskDeliverablesList){
+  $taskDeliverablesList.addEventListener('change', (e)=>{
+    const input = e.target.closest('input[data-deliverable-index]');
+    if(!input) return;
+    const idx = Number(input.dataset.deliverableIndex);
+    if(Number.isInteger(idx) && currentTaskDeliverables[idx]){
+      currentTaskDeliverables[idx].done = input.checked;
+    }
+  });
+  $taskDeliverablesList.addEventListener('click', (e)=>{
+    const btn = e.target.closest('[data-remove-deliverable]');
+    if(!btn) return;
+    const idx = Number(btn.dataset.removeDeliverable);
+    if(Number.isInteger(idx)){
+      currentTaskDeliverables.splice(idx,1);
+      renderTaskDeliverables();
+    }
+  });
+}
+if($taskAttachmentsList){
+  $taskAttachmentsList.addEventListener('click', (e)=>{
+    const btn = e.target.closest('[data-remove-attachment]');
+    if(!btn) return;
+    const id = btn.dataset.removeAttachment;
+    if(id) deleteTaskAttachment(id);
+  });
+}
+
+function renderTaskDeliverables(){
+  if(!$taskDeliverablesList) return;
+  if(!currentTaskDeliverables.length){
+    $taskDeliverablesList.innerHTML = '<li class="attachment-empty">Sin entregables registrados.</li>';
+    lucide.createIcons();
+    return;
+  }
+  $taskDeliverablesList.innerHTML = currentTaskDeliverables.map((item, idx)=>{
+    const safeLabel = item?.label || `Entregable ${idx+1}`;
+    const checked = item?.done ? 'checked' : '';
+    const notes = item?.notes ? `<span class="deliverable-meta">${item.notes}</span>` : '';
+    return `
+      <li>
+        <div class="deliverable-item">
+          <label>
+            <input type="checkbox" data-deliverable-index="${idx}" ${checked}>
+            <span>${safeLabel}</span>
+          </label>
+          ${notes}
+        </div>
+        <button type="button" title="Eliminar" data-remove-deliverable="${idx}"><i data-lucide="x"></i></button>
+      </li>
+    `;
+  }).join('');
+  lucide.createIcons();
+}
+
+function renderTaskAttachments(){
+  if(!$taskAttachmentsList) return;
+  if(!currentTaskAttachments.length){
+    $taskAttachmentsList.innerHTML = '<li class="attachment-empty">Sin adjuntos</li>';
+    lucide.createIcons();
+    return;
+  }
+  $taskAttachmentsList.innerHTML = currentTaskAttachments.map(att=>{
+    const safeName = att?.file_name || 'Archivo';
+    const url = att?.file_url || '#';
+    const id = att?.id || '';
+    return `
+      <li>
+        <a href="${url}" target="_blank" rel="noopener">${safeName}</a>
+        <div class="attachment-actions">
+          <button type="button" title="Eliminar adjunto" data-remove-attachment="${id}"><i data-lucide="trash-2"></i></button>
+        </div>
+      </li>
+    `;
+  }).join('');
+  lucide.createIcons();
+}
+
+async function loadTaskAttachments(taskId){
+  if(!taskId){ currentTaskAttachments = []; renderTaskAttachments(); return; }
+  try{
+    const { data, error } = await sb
+      .from('task_attachments')
+      .select('id,task_id,file_name,file_path,file_url,created_at')
+      .eq('task_id', taskId)
+      .order('created_at', { ascending:false });
+    if(error) throw error;
+    currentTaskAttachments = data || [];
+  }catch(err){
+    toast(err?.message || 'No fue posible cargar los adjuntos.', 'error');
+    currentTaskAttachments = [];
+  }
+  renderTaskAttachments();
+}
+
+async function deleteTaskAttachment(id){
+  if(!id) return;
+  const att = currentTaskAttachments.find(a=> a.id === id);
+  try{
+    if(att?.file_path){
+      await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove([att.file_path]);
+    }
+  }catch(e){}
+  try{
+    await sb.from('task_attachments').delete().eq('id', id);
+    currentTaskAttachments = currentTaskAttachments.filter(a=> a.id !== id);
+    renderTaskAttachments();
+    toast('Adjunto eliminado','ok');
+  }catch(err){
+    toast(err?.message || 'No fue posible eliminar el adjunto.','error');
+  }
+}
+
+function sanitizeFileName(name){
+  return (name || 'archivo')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-zA-Z0-9._-]+/g,'_');
+}
+
+async function uploadTaskAttachments(taskId, files = []){
+  if(!taskId || !files.length) return [];
+  const uploaded = [];
+  for(const file of files){
+    const extSafe = sanitizeFileName(file.name || 'archivo');
+    const path = `${taskId}/${Date.now()}-${Math.random().toString(36).slice(2)}-${extSafe}`;
+    const { error: upError } = await sb.storage
+      .from(TASK_ATTACHMENTS_BUCKET)
+      .upload(path, file, { upsert:false, contentType: file.type || undefined });
+    if(upError){ throw upError; }
+    const { data: pub } = sb.storage.from(TASK_ATTACHMENTS_BUCKET).getPublicUrl(path);
+    const file_url = pub?.publicUrl || '';
+    const record = {
+      task_id: taskId,
+      file_name: file.name,
+      file_path: path,
+      file_url
+    };
+    const { data, error } = await sb
+      .from('task_attachments')
+      .insert(record)
+      .select()
+      .single();
+    if(error) throw error;
+    uploaded.push(data);
+  }
+  return uploaded;
+}
+
 function catPill(cat){
   return catLabel(cat);
 }
@@ -664,20 +954,34 @@ async function loadJobs(){
     return j.category === requested;
   });
 
-  $grid.innerHTML = rows.map(j=>`
-    <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
-      <div class="row">
-        <div class="title">${j.title}</div>
-        <div class="tags"><span class="pill">${catPill(j.category)}</span></div>
-      </div>
-      <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
-      <div class="row">
-        <small class="muted">${j.client_name||''}</small>
-        <small class="muted">${j.due_at ? "Entrega "+formatDateTimeBogota(j.due_at):""}</small>
-      </div>
-      <div class="progress"><span style="width:${j.progress||0}%"></span></div>
-    </article>
-  `).join("");
+  $grid.innerHTML = rows.map(j=>{
+    const budget = formatCurrencyCOP(j.presupuesto);
+    const actual = formatCurrencyCOP(j.costo_real);
+    const hoursEst = formatHoursValue(j.horas_estimadas);
+    const hoursReal = formatHoursValue(j.horas_reales);
+    const eta = j.due_at ? `Entrega ${formatDateTimeBogota(j.due_at)}` : '';
+    const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
+    const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+    return `
+      <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
+        <div class="row">
+          <div class="title">${j.title}</div>
+          <div class="tags"><span class="pill">${catPill(j.category)}</span></div>
+        </div>
+        <div class="subrow"><span class="pill st-${j.status}">${statusLabel(j.status)}</span></div>
+        <div class="row">
+          <small class="muted">${j.client_name||''}</small>
+          <small class="muted">${eta}</small>
+        </div>
+        <div class="progress"><span style="width:${j.progress||0}%"></span></div>
+        <div class="job-finance">
+          <div class="meta-row"><span>Presupuesto</span><strong>${budget}</strong></div>
+          <div class="meta-row"><span>Costo real</span><span>${actual}</span>${deltaBudget}</div>
+          <div class="meta-row"><span>Horas</span><span class="hours-chip">Real ${hoursReal} · Est. ${hoursEst}</span>${deltaHours}</div>
+        </div>
+      </article>
+    `;
+  }).join("");
 
   document.querySelectorAll(".job").forEach(el=>{
     el.onclick = async ()=>{
@@ -802,6 +1106,7 @@ function enhanceUI(){
         $taskProgress.value=0;
         const $note = document.getElementById('task-note'); if($note) $note.value='';
         const $updates = document.getElementById('task-updates'); if($updates) $updates.innerHTML='';
+        resetTaskModalExtras();
         $taskModalTitle.textContent='Nueva tarea';
         await loadJobsIntoTaskSelect();
         if(currentJob){
@@ -810,6 +1115,7 @@ function enhanceUI(){
         } else {
           if($taskJobWrap) $taskJobWrap.style.display = '';
         }
+        await loadTaskAttachments(null);
       }catch(e){}
       if($btnCompleteTask){ $btnCompleteTask.style.display = 'none'; }
       openDialog(document.getElementById('modal-task'));
@@ -818,28 +1124,48 @@ function enhanceUI(){
   if(btnSaveTask){
     btnSaveTask.onclick = async ()=>{
       const job_id = currentJob || ($taskJob && $taskJob.value) || null;
-      const obj = {
+      const title = document.getElementById('task-title').value.trim();
+      if(!title){ toast('Título requerido','error'); return; }
+      if(!job_id){ toast('Selecciona un trabajo','error'); return; }
+      const progressValue = Number(document.getElementById('task-progress').value || 0);
+      const hoursValueRaw = $taskHours ? $taskHours.value : '';
+      let horas_invertidas = null;
+      if(hoursValueRaw !== '' && hoursValueRaw !== null && hoursValueRaw !== undefined){
+        const parsedHours = Number(hoursValueRaw);
+        if(!Number.isNaN(parsedHours)) horas_invertidas = parsedHours;
+      }
+      const deliverablesPayload = currentTaskDeliverables.map(item=>({
+        label: item?.label || 'Entregable',
+        done: !!item?.done,
+        notes: item?.notes ? String(item.notes) : undefined
+      }));
+      const payload = {
         job_id,
-        title: document.getElementById('task-title').value.trim(),
+        title,
         assignee: document.getElementById('task-assignee').value || null,
         status: document.getElementById('task-status').value,
-        progress: Number(document.getElementById('task-progress').value || 0)
+        progress: Number.isNaN(progressValue) ? 0 : progressValue,
+        horas_invertidas,
+        deliverables: deliverablesPayload.length ? deliverablesPayload : null
       };
-      if(!obj.title){ toast('Título requerido','error'); return; }
-      if(!obj.job_id){ toast('Selecciona un trabajo','error'); return; }
+      const note = (document.getElementById('task-note')?.value || '').trim();
+      const files = $taskAttachmentsInput ? Array.from($taskAttachmentsInput.files || []) : [];
       const id = document.getElementById('task-id').value;
-      if(id){
-        const { error } = await sb.from('tasks').update(obj).eq('id', id);
-        if(error){ toast(error.message,'error'); return; }
-        try{ await addTaskUpdate(id, obj.progress, (document.getElementById('task-note')?.value || '').trim()); }catch(e){}
-        toast('Tarea actualizada','ok');
-      } else {
-        const { data, error } = await sb.from('tasks').insert(obj).select().single();
-        if(error){ toast(error.message,'error'); return; }
-        try{ await addTaskUpdate(data.id, obj.progress, (document.getElementById('task-note')?.value || '').trim() || 'Creación de tarea'); }catch(e){}
-        toast('Tarea creada','ok');
+      try{
+        if(id){
+          await updateTaskRecord(id, payload, note, files);
+          toast('Tarea actualizada','ok');
+        }else{
+          await saveTaskRecord(payload, note, files);
+          toast('Tarea creada','ok');
+        }
+      }catch(err){
+        toast(err?.message || 'No fue posible guardar la tarea.','error');
+        return;
       }
+      if($taskAttachmentsInput) $taskAttachmentsInput.value = '';
       closeDialog(document.getElementById('modal-task'));
+      resetTaskModalExtras();
       await loadKanban(); await loadJobs(); await updateStats();
       await loadTaskGlobalList($taskGlobalFilter?.value || 'upcoming');
       await loadWidgets();
@@ -850,6 +1176,21 @@ function enhanceUI(){
       const id = document.getElementById('task-id').value;
       if(!id){ closeDialog(document.getElementById('modal-task')); return; }
       if(!confirm('¿Eliminar tarea?')) return;
+      let attachments = [];
+      try{
+        const { data } = await sb.from('task_attachments').select('id,file_path').eq('task_id', id);
+        attachments = data || [];
+      }catch(e){}
+      if(attachments.length){
+        const ids = attachments.map(a=> a.id).filter(Boolean);
+        const paths = attachments.map(a=> a.file_path).filter(Boolean);
+        try{
+          if(paths.length) await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove(paths);
+        }catch(e){}
+        try{
+          if(ids.length) await sb.from('task_attachments').delete().in('id', ids);
+        }catch(e){}
+      }
       const { error } = await sb.from('tasks').delete().eq('id', id);
       if(error){ toast(error.message,'error'); return; }
       toast('Tarea eliminada','ok');
@@ -909,6 +1250,10 @@ function enhanceUI(){
       document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
       document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
       document.getElementById('edit-job-desc').value = data.description || '';
+      document.getElementById('edit-job-budget').value = data.presupuesto ?? '';
+      document.getElementById('edit-job-actual-cost').value = data.costo_real ?? '';
+      document.getElementById('edit-job-hours-estimated').value = data.horas_estimadas ?? '';
+      document.getElementById('edit-job-hours-real').value = data.horas_reales ?? '';
       openDialog(modalEditJob);
     };
   }
@@ -924,7 +1269,11 @@ function enhanceUI(){
         progress: Number(document.getElementById('edit-job-progress').value||0),
         start_at: document.getElementById('edit-job-start').value || null,
         due_at: document.getElementById('edit-job-due').value || null,
-        description: descValue.trim()
+        description: descValue.trim(),
+        presupuesto: toNullableNumber(document.getElementById('edit-job-budget')?.value),
+        costo_real: toNullableNumber(document.getElementById('edit-job-actual-cost')?.value),
+        horas_estimadas: toNullableNumber(document.getElementById('edit-job-hours-estimated')?.value),
+        horas_reales: toNullableNumber(document.getElementById('edit-job-hours-real')?.value)
       };
       if(!payload.title){ toast('Título requerido','error'); return; }
       const { error } = await sb.from('jobs').update(payload).eq('id', id);
@@ -947,17 +1296,31 @@ async function loadJobsIntoTaskSelect(){
 async function openTaskEditor(taskId){
   const { data, error } = await sb.from('tasks').select('*').eq('id', taskId).single();
   if(error){ toast(error.message,'error'); return; }
+  resetTaskModalExtras();
   await loadUsersIntoSelect();
   $taskId.value = data.id;
   $taskTitle.value = data.title || '';
   $taskAssignee.value = data.assignee || '';
   $taskStatus.value = data.status || 'todo';
   $taskProgress.value = Number(data.progress||0);
+  if($taskHours){
+    const hrs = data.horas_invertidas;
+    $taskHours.value = (hrs === null || hrs === undefined) ? '' : Number(hrs);
+  }
   const $note = document.getElementById('task-note'); if($note) $note.value = '';
   $taskModalTitle.textContent = 'Editar tarea';
   await loadJobsIntoTaskSelect();
   if($taskJob){ $taskJob.value = data.job_id || currentJob || ''; }
   if($taskJobWrap) $taskJobWrap.style.display = '';
+  currentTaskDeliverables = Array.isArray(data.deliverables)
+    ? data.deliverables.map(item=>({
+        label: item?.label || item?.titulo || 'Entregable',
+        done: !!item?.done,
+        notes: item?.notes || item?.descripcion || ''
+      }))
+    : [];
+  renderTaskDeliverables();
+  await loadTaskAttachments(taskId);
   try{ await loadTaskUpdates(taskId); }catch(e){}
   if($btnCompleteTask){
     let me = null;
@@ -971,12 +1334,56 @@ async function openTaskEditor(taskId){
 }
 
 // Registrar actualización de tarea
-async function addTaskUpdate(taskId, progress, note){
+async function addTaskUpdate(taskId, progress, note, meta = {}){
   try{
     const { data: { user } } = await sb.auth.getUser();
     const user_id = user && user.id;
-    await sb.from('task_updates').insert({ task_id: taskId, user_id, progress, note: note || null });
+    const extras = [];
+    if(meta && typeof meta === 'object'){
+      if(meta.horas_invertidas !== undefined && meta.horas_invertidas !== null && meta.horas_invertidas !== ''){
+        const hrs = Number(meta.horas_invertidas);
+        if(!Number.isNaN(hrs)) extras.push(`Horas ${hrs.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })}`);
+      }
+      if(Array.isArray(meta.deliverables) && meta.deliverables.length){
+        const total = meta.deliverables.length;
+        const done = meta.deliverables.filter(d=> d && d.done).length;
+        extras.push(`Entregables ${done}/${total}`);
+      }
+    }
+    let fullNote = (note || '').trim();
+    if(extras.length){
+      fullNote = fullNote ? `${fullNote} · ${extras.join(' · ')}` : extras.join(' · ');
+    }
+    await sb.from('task_updates').insert({ task_id: taskId, user_id, progress, note: fullNote || null });
   }catch(e){}
+}
+
+async function saveTaskRecord(payload, note, files){
+  const { data, error } = await sb.from('tasks').insert(payload).select().single();
+  if(error) throw error;
+  await addTaskUpdate(data.id, payload.progress, note || 'Creación de tarea', {
+    horas_invertidas: payload.horas_invertidas,
+    deliverables: payload.deliverables || []
+  });
+  if(files && files.length){
+    currentTaskAttachments = await uploadTaskAttachments(data.id, files);
+    renderTaskAttachments();
+  }
+  return data;
+}
+
+async function updateTaskRecord(id, payload, note, files){
+  const { error } = await sb.from('tasks').update(payload).eq('id', id);
+  if(error) throw error;
+  await addTaskUpdate(id, payload.progress, note || 'Actualización de tarea', {
+    horas_invertidas: payload.horas_invertidas,
+    deliverables: payload.deliverables || []
+  });
+  if(files && files.length){
+    const uploaded = await uploadTaskAttachments(id, files);
+    currentTaskAttachments = [...uploaded, ...currentTaskAttachments];
+    renderTaskAttachments();
+  }
 }
 
 // Cargar historial de actualizaciones
@@ -1120,7 +1527,11 @@ document.getElementById("btn-save-job").onclick = async ()=>{
     category: selectedCat,
     description: descriptionInput.trim(),
     start_at: document.getElementById("job-start").value || null,
-    due_at: document.getElementById("job-due").value || null
+    due_at: document.getElementById("job-due").value || null,
+    presupuesto: toNullableNumber(document.getElementById('job-budget')?.value),
+    costo_real: toNullableNumber(document.getElementById('job-actual-cost')?.value),
+    horas_estimadas: toNullableNumber(document.getElementById('job-hours-estimated')?.value),
+    horas_reales: toNullableNumber(document.getElementById('job-hours-real')?.value)
   };
   if(!obj.title){ toast("Título requerido","error"); return; }
   const { error } = await sb.from("jobs").insert(obj);
@@ -1131,13 +1542,9 @@ document.getElementById("btn-save-job").onclick = async ()=>{
 
 document.getElementById("btn-edit-job").onclick = async ()=>{
   if(!currentJob){ toast("Selecciona un trabajo","error"); return; }
-  const { data } = await sb.from("jobs").select("*").eq("id", currentJob).single();
-  const newTitle = prompt("Nuevo título:", data.title);
-  if(newTitle && newTitle.trim()!==data.title){
-    const { error } = await sb.from("jobs").update({ title:newTitle.trim() }).eq("id", currentJob);
-    if(error){ toast(error.message,"error"); return; }
-    await loadJobs(); await loadKanban();
-  }
+  try{
+    await openEditJobModal(currentJob);
+  }catch(e){ toast(e?.message || 'No fue posible cargar el trabajo.','error'); }
 };
 
 // ---------- Tareas ----------
@@ -1325,6 +1732,11 @@ async function loadJobsTable(){
   const rows = filtered.map(j=>{
     const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
     const eta = j.due_at ? formatDateTimeBogota(j.due_at) : '';
+    const budget = formatCurrencyCOP(j.presupuesto);
+    const actual = formatCurrencyCOP(j.costo_real);
+    const hoursLabel = `Est. ${formatHoursValue(j.horas_estimadas)} · Real ${formatHoursValue(j.horas_reales)}`;
+    const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
+    const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
     return `
       <tr>
         <td>${j.title}</td>
@@ -1332,6 +1744,9 @@ async function loadJobsTable(){
         <td>${catPill(j.category)}</td>
         <td><span class="pill">${statusLabel}</span></td>
         <td class="progress-cell"><div class="progress"><span style="width:${j.progress||0}%"></span></div></td>
+        <td>${budget}</td>
+        <td>${actual}<br>${deltaBudget}</td>
+        <td><span class="hours-chip">${hoursLabel}</span><br>${deltaHours}</td>
         <td>${eta}</td>
         <td>
           <button class="btn btn-ghost small" title="Abrir" data-open-job="${j.id}"><i data-lucide="external-link"></i></button>
@@ -1381,11 +1796,17 @@ async function loadArchivedJobsTable(){
   const rows = filtered.map(j=>{
     const archivedAt = j.archived_at || j.updated_at || j.created_at;
     const when = archivedAt ? formatDateTimeBogota(archivedAt) : '';
+    const budget = formatCurrencyCOP(j.presupuesto);
+    const actual = formatCurrencyCOP(j.costo_real);
+    const hoursReal = formatHoursValue(j.horas_reales);
     return `
       <tr>
         <td>${j.title}</td>
         <td>${j.client_name||''}</td>
         <td>${catPill(j.category)}</td>
+        <td>${budget}</td>
+        <td>${actual}</td>
+        <td>${hoursReal}</td>
         <td>${when}</td>
       </tr>
     `;
@@ -1698,6 +2119,10 @@ async function openEditJobModal(id){
   document.getElementById('edit-job-start').value = data.start_at ? new Date(data.start_at).toISOString().slice(0,16) : '';
   document.getElementById('edit-job-due').value = data.due_at ? new Date(data.due_at).toISOString().slice(0,16) : '';
   document.getElementById('edit-job-desc').value = data.description||'';
+  document.getElementById('edit-job-budget').value = data.presupuesto ?? '';
+  document.getElementById('edit-job-actual-cost').value = data.costo_real ?? '';
+  document.getElementById('edit-job-hours-estimated').value = data.horas_estimadas ?? '';
+  document.getElementById('edit-job-hours-real').value = data.horas_reales ?? '';
   openDialog(document.getElementById('modal-edit-job'));
 }
 async function archiveJob(id){

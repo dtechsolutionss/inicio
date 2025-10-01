@@ -57,6 +57,34 @@ input,select,textarea{
   border-radius:12px; outline:none;
 }
 textarea{resize:vertical}
+.form-section{margin-top:12px; display:grid; gap:8px}
+.attachment-list,
+.deliverable-list{list-style:none; margin:0; padding:0; display:grid; gap:8px}
+.attachment-list li,
+.deliverable-list li{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:12px; background:#f8fafc}
+.attachment-list a{color:var(--accent); font-weight:600; text-decoration:none; word-break:break-word}
+.attachment-actions{display:flex; gap:6px; align-items:center}
+.deliverable-input{display:flex; gap:8px; align-items:center}
+.deliverable-item{display:flex; align-items:center; gap:10px; flex:1}
+.deliverable-item label{display:flex; align-items:center; gap:8px; cursor:pointer}
+.deliverable-item input[type="checkbox"]{width:18px; height:18px; accent-color:var(--accent)}
+.deliverable-meta{color:#64748b; font-size:.8rem}
+.deliverable-list button,
+.attachment-list button{border:none; background:transparent; color:#ef4444; cursor:pointer; display:grid; place-items:center; width:28px; height:28px; border-radius:8px}
+.deliverable-list button:hover,
+.attachment-list button:hover{background:rgba(239,68,68,.12)}
+.attachment-empty{color:#64748b; font-size:.85rem; padding:4px 0}
+.delta-chip{display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:.75rem; font-weight:600}
+.delta-positive{background:rgba(34,197,94,.12); color:#15803d}
+.delta-negative{background:rgba(239,68,68,.12); color:#b91c1c}
+.delta-neutral{background:#e2e8f0; color:#475569}
+.hours-chip{display:inline-flex; gap:6px; align-items:center; font-size:.78rem; color:#475569}
+.job-finance{display:flex; flex-direction:column; gap:6px; margin-top:8px}
+.job-finance .meta-row{display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:.8rem; color:#475569}
+.job-finance .meta-row strong{font-weight:700}
+.job-finance .meta-row span{display:flex; align-items:center; gap:6px}
+.job-finance .meta-row .delta-chip{margin-left:auto}
+.job-hours{display:flex; gap:6px; align-items:center; font-size:.8rem; color:#475569}
 .hint{color:#64748b; font-size:.85rem}
 .auth-floating-back{
   position:fixed;
@@ -582,3 +610,11 @@ textarea{resize:vertical}
 [data-theme="dark"] .job .pill.st-in_progress{ background:rgba(59,130,246,.24); border-color:#60a5fa; color:#dbeafe }
 [data-theme="dark"] .job .pill.st-new{ background:#1c2431; border-color:#2a2d33; color:#e2e8f0 }
 [data-theme="dark"] .job.selected{ outline-color:var(--accent); box-shadow:0 0 0 1px rgba(37,99,235,.24) }
+[data-theme="dark"] .attachment-list li,
+[data-theme="dark"] .deliverable-list li{ background:#0f1115; border-color:#262a30; color:var(--text) }
+[data-theme="dark"] .attachment-list a{ color:#38bdf8 }
+[data-theme="dark"] .deliverable-meta{ color:#94a3b8 }
+[data-theme="dark"] .attachment-empty{ color:#94a3b8 }
+[data-theme="dark"] .delta-neutral{ background:#1f2937; color:#cbd5f5 }
+[data-theme="dark"] .hours-chip{ color:#cbd5f5 }
+[data-theme="dark"] .job-finance .meta-row{ color:#cbd5f5 }

@@ -344,7 +344,10 @@
                     <th>Categoría</th>
                     <th>Estado</th>
                     <th>Avance</th>
-                    <th>ETA</th>
+                    <th>Presupuesto</th>
+                    <th>Costo real</th>
+                    <th>Horas (est./real)</th>
+                    <th>Entrega</th>
                     <th>Acciones</th>
                   </tr>
                 </thead>
@@ -368,6 +371,9 @@
                     <th>Título</th>
                     <th>Cliente</th>
                     <th>Categoría</th>
+                    <th>Presupuesto</th>
+                    <th>Costo real</th>
+                    <th>Horas reales</th>
                     <th>Archivado</th>
                   </tr>
                 </thead>
@@ -433,6 +439,26 @@
             <input id="job-due" type="datetime-local">
           </div>
         </div>
+        <div class="row-2">
+          <div>
+            <label>Presupuesto (COP)</label>
+            <input id="job-budget" type="number" min="0" step="0.01" placeholder="0.00">
+          </div>
+          <div>
+            <label>Costo real (COP)</label>
+            <input id="job-actual-cost" type="number" min="0" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Horas estimadas</label>
+            <input id="job-hours-estimated" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+          <div>
+            <label>Horas reales</label>
+            <input id="job-hours-real" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+        </div>
         <button id="btn-save-job" class="btn btn-primary">Guardar trabajo</button>
       </div>
     </div>
@@ -464,8 +490,26 @@
         </select>
         <label>Progreso (%)</label>
         <input id="task-progress" type="number" min="0" max="100" value="0">
+        <label>Horas invertidas</label>
+        <input id="task-hours" type="number" min="0" step="0.25" placeholder="0">
         <label>Comentario (opcional)</label>
         <textarea id="task-note" rows="2" placeholder="Qué hiciste o siguiente paso?"></textarea>
+        <div class="form-section">
+          <label for="task-attachments">Adjuntos</label>
+          <input id="task-attachments" type="file" multiple>
+          <small class="muted">Puedes adjuntar documentos, imágenes o entregables relacionados con la tarea.</small>
+          <ul id="task-attachments-list" class="attachment-list"></ul>
+        </div>
+        <div class="form-section">
+          <label>Entregables</label>
+          <div class="deliverable-input">
+            <input id="task-deliverable-input" placeholder="Nombre del entregable">
+            <button id="btn-add-deliverable" type="button" class="btn btn-ghost small">
+              <i data-lucide="plus"></i><span>Agregar</span>
+            </button>
+          </div>
+          <ul id="task-deliverables" class="deliverable-list"></ul>
+        </div>
         <div>
           <button id="btn-save-task" class="btn btn-primary">Guardar</button>
           <button id="btn-complete-task" class="btn btn-ghost">Marcar como cumplida</button>
@@ -610,6 +654,26 @@
         </div>
         <label>Descripción</label>
         <textarea id="edit-job-desc" rows="3"></textarea>
+        <div class="row-2">
+          <div>
+            <label>Presupuesto (COP)</label>
+            <input id="edit-job-budget" type="number" min="0" step="0.01" placeholder="0.00">
+          </div>
+          <div>
+            <label>Costo real (COP)</label>
+            <input id="edit-job-actual-cost" type="number" min="0" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <div class="row-2">
+          <div>
+            <label>Horas estimadas</label>
+            <input id="edit-job-hours-estimated" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+          <div>
+            <label>Horas reales</label>
+            <input id="edit-job-hours-real" type="number" min="0" step="0.25" placeholder="0">
+          </div>
+        </div>
         <div>
           <button id="btn-save-edit-job" class="btn btn-primary">Guardar cambios</button>
         </div>
