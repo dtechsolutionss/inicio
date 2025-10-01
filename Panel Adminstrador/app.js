@@ -492,10 +492,19 @@ async function loadTaskGlobalList(mode = 'upcoming'){
     }
 
     if(mode === 'team'){
-      const { data: tasks, error } = await sb.from('tasks').select('assignee,status,due_at').neq('status','done');
+      const { data: tasks, error } = await sb.from('tasks').select('assignee,status,job_id').neq('status','done');
       if(error) throw error;
+      const jobIds = [...new Set((tasks||[]).map(t=> t.job_id).filter(Boolean))];
+      const jobsMap = {};
+      if(jobIds.length){
+        const { data: jobs } = await sb.from('jobs').select('id,due_at').in('id', jobIds);
+        (jobs||[]).forEach(j=>{ if(j && j.id) jobsMap[j.id] = j; });
+      }
       const groups = {};
-      (tasks||[]).filter(t=> t.due_at && getBogotaDateKey(t.due_at) === referenceDateKey).forEach(t=>{
+      (tasks||[])
+        .map(task=>({ task, job: jobsMap[task.job_id] }))
+        .filter(x=> x.job && x.job.due_at && getBogotaDateKey(x.job.due_at) === referenceDateKey)
+        .forEach(({ task: t })=>{
         const key = t.assignee || 'sin';
         groups[key] = groups[key] || { total:0, doing:0, review:0, todo:0 };
         if(t.status==='doing') groups[key].doing++;
@@ -523,7 +532,7 @@ async function loadTaskGlobalList(mode = 'upcoming'){
 
     if(!me){ $taskGlobalList.innerHTML = '<li class="meta">Inicia sesión para ver tus tareas.</li>'; return; }
     const { data: tasks, error } = await sb.from('tasks')
-      .select('id,title,status,progress,assignee,job_id,due_at')
+      .select('id,title,status,progress,assignee,job_id')
       .neq('status','done');
     if(error) throw error;
     const pool = (tasks||[]).filter(t=>{
