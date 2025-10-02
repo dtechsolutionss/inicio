@@ -1054,14 +1054,35 @@ async function loadJobs(){
     return j.category === requested;
   });
 
+  const jobIds = rows.map(j=> j.id).filter(Boolean);
+  let jobDetailsMap = {};
+  if(jobIds.length){
+    try{
+      const { data: jobDetails } = await sb
+        .from('jobs')
+        .select('id,presupuesto,costo_real,horas_estimadas,horas_reales')
+        .in('id', jobIds);
+      (jobDetails || []).forEach(job=>{
+        if(job && job.id) jobDetailsMap[job.id] = job;
+      });
+    }catch(err){
+      console.error('No se pudieron cargar los detalles de presupuesto de los proyectos', err);
+    }
+  }
+
   $grid.innerHTML = rows.map(j=>{
-    const budget = formatCurrencyCOP(j.presupuesto);
-    const actual = formatCurrencyCOP(j.costo_real);
-    const hoursEst = formatHoursValue(j.horas_estimadas);
-    const hoursReal = formatHoursValue(j.horas_reales);
+    const detail = jobDetailsMap[j.id] || {};
+    const presupuesto = detail.presupuesto ?? j.presupuesto;
+    const costoReal = detail.costo_real ?? j.costo_real;
+    const horasEst = detail.horas_estimadas ?? j.horas_estimadas;
+    const horasReal = detail.horas_reales ?? j.horas_reales;
+    const budget = formatCurrencyCOP(presupuesto);
+    const actual = formatCurrencyCOP(costoReal);
+    const hoursEstDisplay = formatHoursValue(horasEst);
+    const hoursRealDisplay = formatHoursValue(horasReal);
     const eta = j.due_at ? `Entrega ${formatDateTimeBogota(j.due_at)}` : '';
-    const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
-    const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+    const deltaBudget = buildDeltaChip(costoReal, presupuesto);
+    const deltaHours = buildHoursDelta(horasReal, horasEst);
     return `
       <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
         <div class="row">
@@ -1077,7 +1098,7 @@ async function loadJobs(){
         <div class="job-finance">
           <div class="meta-row"><span>Presupuesto</span><strong>${budget}</strong></div>
           <div class="meta-row"><span>Costo real</span><span>${actual}</span>${deltaBudget}</div>
-          <div class="meta-row"><span>Horas</span><span class="hours-chip">Real ${hoursReal} · Est. ${hoursEst}</span>${deltaHours}</div>
+          <div class="meta-row"><span>Horas</span><span class="hours-chip">Real ${hoursRealDisplay} · Est. ${hoursEstDisplay}</span>${deltaHours}</div>
         </div>
       </article>
     `;
