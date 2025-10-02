@@ -62,6 +62,11 @@ function buildInFilterString(values = []){
   return `(${unique.map(v=>`"${v}"`).join(',')})`;
 }
 
+function resolveJobCompletionDate(job){
+  if(!job) return null;
+  return job.completed_at || job.updated_at || job.due_at || job.created_at || null;
+}
+
 const JOB_STATUS_EXCLUDE_ACTIVE = buildInFilterString([ARCHIVED_STATUS, ...COMPLETED_STATUS_DB_VALUES]);
 
 let canManageUsers = false;
@@ -1916,16 +1921,23 @@ async function loadCompletedJobsTable(){
   const { data, error } = await sb
     .from('jobs_view')
     .select('*')
-    .in('status', Array.from(COMPLETED_STATUS_DB_SET))
-    .order('completed_at', { ascending:false, nullsFirst:false });
+    .in('status', Array.from(COMPLETED_STATUS_DB_SET));
   if(error){
     tbody.innerHTML = '';
     if(hint) hint.textContent = error.message || 'No fue posible cargar los trabajos completados.';
     toast(error.message || 'No fue posible cargar los trabajos completados.', 'error');
     return;
   }
+  const rowsData = (data || []).slice().sort((a,b)=>{
+    const aKey = resolveJobCompletionDate(a);
+    const bKey = resolveJobCompletionDate(b);
+    if(!aKey && !bKey) return 0;
+    if(!aKey) return 1;
+    if(!bKey) return -1;
+    return new Date(bKey).getTime() - new Date(aKey).getTime();
+  });
   const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
-  const filtered = (data || []).filter(j=>{
+  const filtered = rowsData.filter(j=>{
     if(!q) return true;
     return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
   });
@@ -1948,7 +1960,7 @@ async function loadCompletedJobsTable(){
     const costoReal = detail.costo_real ?? j.costo_real;
     const horasEst = detail.horas_estimadas ?? j.horas_estimadas;
     const horasReal = detail.horas_reales ?? j.horas_reales;
-    const completedAt = j.completed_at || j.updated_at || j.due_at || j.created_at;
+    const completedAt = resolveJobCompletionDate(j);
     const when = completedAt ? formatDateTimeBogota(completedAt) : '';
     const budget = formatCurrencyCOP(presupuesto);
     const actual = formatCurrencyCOP(costoReal);
