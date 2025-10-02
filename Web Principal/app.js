@@ -150,7 +150,34 @@ window.addEventListener('DOMContentLoaded', () => {
     }, { passive: true });
   });
   if (form) {
-    form.addEventListener('submit', (e) => {
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const setButtonState = (isLoading) => {
+      if (!submitBtn) return;
+      submitBtn.disabled = !!isLoading;
+      if (isLoading) {
+        submitBtn.setAttribute('aria-busy', 'true');
+      } else {
+        submitBtn.removeAttribute('aria-busy');
+      }
+    };
+    const showFeedback = (message, state = 'pending', autoHide = true) => {
+      if (!feedback) return;
+      if (feedback._timer) {
+        clearTimeout(feedback._timer);
+        feedback._timer = null;
+      }
+      feedback.hidden = false;
+      feedback.textContent = message;
+      feedback.classList.remove('pending', 'success', 'error');
+      if (state) feedback.classList.add(state);
+      if (autoHide) {
+        feedback._timer = setTimeout(() => {
+          feedback.hidden = true;
+          feedback._timer = null;
+        }, 6000);
+      }
+    };
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const name = document.getElementById('cf_name');
       const email = document.getElementById('cf_email');
@@ -159,15 +186,39 @@ window.addEventListener('DOMContentLoaded', () => {
         form.reportValidity();
         return;
       }
-      const to = 'dtechsolutions@gmail.com';
+      const payload = {
+        name: name.value.trim(),
+        email: email.value.trim(),
+        message: msg.value.trim(),
+      };
+      const to = 'stikmena6@gmail.com';
       const subject = encodeURIComponent('Contacto web - D TECH SOLUTIONS');
-      const body = encodeURIComponent(`Nombre: ${name.value}\nCorreo: ${email.value}\n\nMensaje:\n${msg.value}`);
-      const href = `mailto:${to}?subject=${subject}&body=${body}`;
-      window.location.href = href;
-      if (feedback) {
-        feedback.hidden = false;
-        feedback.textContent = 'Abriendo tu cliente de correo para enviar el mensaje…';
-        setTimeout(() => { feedback.hidden = true; }, 5000);
+      const body = encodeURIComponent(`Nombre: ${payload.name}\nCorreo: ${payload.email}\n\nMensaje:\n${payload.message}`);
+      const fallback = () => {
+        window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+      };
+      try {
+        setButtonState(true);
+        showFeedback('Enviando tu mensaje…', 'pending', false);
+        const response = await fetch('https://formsubmit.co/ajax/stikmena6@gmail.com', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        showFeedback('¡Listo! Tu mensaje fue enviado y te contactaremos pronto.', 'success');
+        form.reset();
+      } catch (err) {
+        console.error('Error enviando el formulario de contacto', err);
+        showFeedback('No pudimos enviar el mensaje automáticamente. Abriendo tu correo para completar el envío.', 'error', false);
+        fallback();
+      } finally {
+        setButtonState(false);
       }
     });
   }
