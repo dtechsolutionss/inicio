@@ -93,9 +93,8 @@ function formatDateTimeBogota(value, includeTime = true){
 }
 
 function formatCurrencyCOP(value){
-  if(value === null || value === undefined || value === '') return '—';
-  const num = Number(value);
-  if(Number.isNaN(num)) return '—';
+  const num = toNullableNumber(value);
+  if(num === null) return '—';
   return copFormatter.format(num);
 }
 
@@ -111,6 +110,8 @@ function parseLocalizedNumber(str){
   if(typeof str !== 'string') return null;
   let cleaned = cleanNumberInputString(str);
   if(!cleaned) return null;
+  const negative = cleaned.startsWith('-');
+  if(negative) cleaned = cleaned.slice(1);
   const hasComma = cleaned.includes(',');
   const hasDot = cleaned.includes('.');
   if(hasComma && hasDot){
@@ -121,7 +122,8 @@ function parseLocalizedNumber(str){
     }
   }else if(hasComma){
     cleaned = cleaned.replace(/,/g, '.');
-  }else if(hasDot){
+  }
+  if(cleaned.includes('.')){
     const firstDot = cleaned.indexOf('.');
     const secondDot = cleaned.indexOf('.', firstDot + 1);
     if(secondDot !== -1){
@@ -133,6 +135,8 @@ function parseLocalizedNumber(str){
       }
     }
   }
+  cleaned = cleaned.replace(/,/g, '');
+  if(negative) cleaned = `-${cleaned}`;
   const num = Number(cleaned);
   return Number.isNaN(num) ? null : num;
 }
@@ -144,19 +148,17 @@ function formatMoneyInputValue(value){
 }
 
 function formatHoursValue(value){
-  if(value === null || value === undefined || value === '') return '—';
-  const num = Number(value);
-  if(Number.isNaN(num)) return '—';
+  const num = toNullableNumber(value);
+  if(num === null) return '—';
   return `${num.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h`;
 }
 
 function buildDeltaChip(current, reference, positiveIsGood = false){
-  if(current === null || current === undefined || current === '' || reference === null || reference === undefined || reference === ''){
+  const curr = toNullableNumber(current);
+  const ref = toNullableNumber(reference);
+  if(curr === null || ref === null){
     return '<span class="delta-chip delta-neutral">Sin datos</span>';
   }
-  const curr = Number(current);
-  const ref = Number(reference);
-  if(Number.isNaN(curr) || Number.isNaN(ref)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
   const delta = curr - ref;
   if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">En presupuesto</span>';
   const favorable = positiveIsGood ? delta >= 0 : delta <= 0;
@@ -167,12 +169,11 @@ function buildDeltaChip(current, reference, positiveIsGood = false){
 }
 
 function buildHoursDelta(real, estimated){
-  if(real === null || real === undefined || real === '' || estimated === null || estimated === undefined || estimated === ''){
+  const r = toNullableNumber(real);
+  const e = toNullableNumber(estimated);
+  if(r === null || e === null){
     return '<span class="delta-chip delta-neutral">Sin datos</span>';
   }
-  const r = Number(real);
-  const e = Number(estimated);
-  if(Number.isNaN(r) || Number.isNaN(e)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
   const delta = r - e;
   if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">Dentro del plan</span>';
   const favorable = delta <= 0;
