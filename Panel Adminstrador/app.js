@@ -52,8 +52,17 @@ const ROLE_PRIORITY = { CEO:0, Administrador:1 };
 const BOGOTA_TZ = 'America/Bogota';
 const copFormatter = new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 });
 const ARCHIVED_STATUS = 'archived';
-const COMPLETED_STATUS_SET = new Set(['done','completed']);
-const JOB_STATUS_EXCLUDE_ACTIVE = `("${ARCHIVED_STATUS}","${Array.from(COMPLETED_STATUS_SET).join('","')}")`;
+const COMPLETED_STATUS_DB_VALUES = ['done'];
+const COMPLETED_STATUS_DB_SET = new Set(COMPLETED_STATUS_DB_VALUES);
+const COMPLETED_STATUS_DISPLAY_SET = new Set([...COMPLETED_STATUS_DB_VALUES, 'completed']);
+
+function buildInFilterString(values = []){
+  if(!values.length) return '()';
+  const unique = [...new Set(values.filter(Boolean))];
+  return `(${unique.map(v=>`"${v}"`).join(',')})`;
+}
+
+const JOB_STATUS_EXCLUDE_ACTIVE = buildInFilterString([ARCHIVED_STATUS, ...COMPLETED_STATUS_DB_VALUES]);
 
 let canManageUsers = false;
 let supportsBlocking = false;
@@ -1038,7 +1047,7 @@ function catPill(cat){
   return catLabel(cat);
 }
 function isCompletedStatus(st){
-  return COMPLETED_STATUS_SET.has(st);
+  return COMPLETED_STATUS_DISPLAY_SET.has(st);
 }
 function statusColor(st){
   if(isCompletedStatus(st)) return "border-color:#16a34a";
@@ -1907,8 +1916,8 @@ async function loadCompletedJobsTable(){
   const { data, error } = await sb
     .from('jobs_view')
     .select('*')
-    .in('status', Array.from(COMPLETED_STATUS_SET))
-    .order('updated_at', { ascending:false });
+    .in('status', Array.from(COMPLETED_STATUS_DB_SET))
+    .order('completed_at', { ascending:false, nullsFirst:false });
   if(error){
     tbody.innerHTML = '';
     if(hint) hint.textContent = error.message || 'No fue posible cargar los trabajos completados.';
