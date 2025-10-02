@@ -32,6 +32,8 @@ const $grid = document.getElementById("jobs-grid");
 const $chips = document.querySelectorAll("#chip-categories .chip");
 const $search = document.getElementById("search-input");
 const $navItems = document.querySelectorAll(".nav-item");
+const $btnArchiveJobAction = document.getElementById('btn-archive-job');
+const $btnUnarchiveJobAction = document.getElementById('btn-unarchive-job');
 
 const CATEGORY_LABELS = {
   web: "Páginas web",
@@ -71,9 +73,28 @@ const JOB_STATUS_EXCLUDE_ACTIVE = buildInFilterString([ARCHIVED_STATUS, ...COMPL
 
 let canManageUsers = false;
 let supportsBlocking = false;
+let currentJobStatus = null;
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
+}
+
+function updateJobActionButtons(status){
+  const nextStatus = status ?? currentJobStatus ?? null;
+  currentJobStatus = nextStatus || null;
+  const hasSelection = !!currentJob;
+  if($btnArchiveJobAction){
+    const shouldShowArchive = hasSelection && nextStatus && nextStatus !== ARCHIVED_STATUS;
+    $btnArchiveJobAction.style.display = shouldShowArchive ? '' : 'none';
+  }
+  if($btnUnarchiveJobAction){
+    const shouldShowUnarchive = hasSelection && nextStatus === ARCHIVED_STATUS;
+    $btnUnarchiveJobAction.style.display = shouldShowUnarchive ? '' : 'none';
+  }
+  if(!hasSelection){
+    if($btnArchiveJobAction) $btnArchiveJobAction.style.display = 'none';
+    if($btnUnarchiveJobAction) $btnUnarchiveJobAction.style.display = 'none';
+  }
 }
 
 function formatBogotaParts(value){
@@ -1131,7 +1152,13 @@ async function loadJobs(){
     el.onclick = async ()=>{
       currentJob = el.dataset.id;
       const job = (data||[]).find(x=>x.id===currentJob);
-      if(job) document.getElementById("kanban-title").textContent = job.title;
+      if(job){
+        document.getElementById("kanban-title").textContent = job.title;
+        currentJobStatus = job.status || null;
+      }else{
+        currentJobStatus = null;
+      }
+      updateJobActionButtons(currentJobStatus);
       document.querySelectorAll('.job').forEach(n=> n.classList.remove('selected'));
       el.classList.add('selected');
       await loadKanban();
@@ -1141,6 +1168,14 @@ async function loadJobs(){
   if(currentJob){
     const sel = document.querySelector(`.job[data-id="${currentJob}"]`);
     if(sel) sel.classList.add('selected');
+    const job = (data||[]).find(x=>x.id===currentJob);
+    if(job){
+      currentJobStatus = job.status || null;
+    }
+    updateJobActionButtons(currentJobStatus);
+  }else{
+    currentJobStatus = null;
+    updateJobActionButtons(null);
   }
 }
 
@@ -1382,6 +1417,20 @@ function enhanceUI(){
   const modalEditJob = document.getElementById('modal-edit-job');
   const btnEditJob = document.getElementById('btn-edit-job');
   const btnSaveEditJob = document.getElementById('btn-save-edit-job');
+  const btnArchiveJob = $btnArchiveJobAction;
+  const btnUnarchiveJob = $btnUnarchiveJobAction;
+  if(btnArchiveJob){
+    btnArchiveJob.onclick = async ()=>{
+      if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
+      await archiveJob(currentJob);
+    };
+  }
+  if(btnUnarchiveJob){
+    btnUnarchiveJob.onclick = async ()=>{
+      if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
+      await unarchiveJob(currentJob);
+    };
+  }
   if(btnEditJob && modalEditJob){
     btnEditJob.onclick = async ()=>{
       if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
@@ -1411,9 +1460,15 @@ function enhanceUI(){
       if(error){ toast(error.message,'error'); return; }
       toast('Trabajo actualizado','ok');
       closeDialog(document.getElementById('modal-edit-job'));
+      if(currentJob === id){
+        currentJobStatus = payload.status || currentJobStatus;
+        updateJobActionButtons(currentJobStatus);
+      }
       await loadJobs(); await loadKanban(); await updateStats(); await loadJobProgressChart();
     };
   }
+
+  updateJobActionButtons(currentJobStatus);
 }
 
 // Cargar trabajos en el select del modal de tarea
@@ -2354,9 +2409,13 @@ function attachJobsTableHandlers(){
     currentJob = b.dataset.openJob; showView('dashboard');
     const titleEl = document.getElementById('kanban-title');
     try{
-      const { data } = await sb.from('jobs').select('title').eq('id', currentJob).single();
+      const { data } = await sb.from('jobs').select('title,status').eq('id', currentJob).single();
       if(titleEl && data) titleEl.textContent = data.title;
-    }catch(e){}
+      currentJobStatus = data?.status || null;
+    }catch(e){
+      currentJobStatus = null;
+    }
+    updateJobActionButtons(currentJobStatus);
     await loadKanban(); await loadJobProgressChart();
   });
   document.querySelectorAll('[data-edit-job-row]').forEach(b=> b.onclick = ()=> openEditJobModal(b.dataset.editJobRow));
@@ -2393,6 +2452,10 @@ async function archiveJob(id){
   const { error } = await sb.from('jobs').update({ status: ARCHIVED_STATUS }).eq('id', id);
   if(error){ toast(error.message,'error'); return; }
   toast('Trabajo archivado','ok');
+  if(currentJob === id){
+    currentJobStatus = ARCHIVED_STATUS;
+    updateJobActionButtons(currentJobStatus);
+  }
   await loadJobsTable(); await loadCompletedJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
 }
 
@@ -2401,6 +2464,10 @@ async function unarchiveJob(id){
   const { error } = await sb.from('jobs').update({ status:'in_progress' }).eq('id', id);
   if(error){ toast(error.message,'error'); return; }
   toast('Trabajo desarchivado','ok');
+  if(currentJob === id){
+    currentJobStatus = 'in_progress';
+    updateJobActionButtons(currentJobStatus);
+  }
   await loadJobsTable(); await loadCompletedJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
 }
 
