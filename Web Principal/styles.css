@@ -196,6 +196,7 @@ section{max-width:var(--container);margin:0 auto;padding:54px 20px}
 .xp{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 .xp .stat{background:linear-gradient(180deg, rgba(34,211,238,.08), rgba(255,255,255,.02));border:none;border-radius:var(--radius);padding:20px;box-shadow:0 12px 36px rgba(0,0,0,.35)}
 .xp .stat b{font-size:32px;font-family:"Space Grotesk"}
+.xp .stat .xp-summary{display:block;margin-bottom:12px;line-height:1.2}
 .xp ul{margin:12px 0 0;padding-left:18px;color:var(--muted)}
 
 /* CTA Contacto */
@@ -228,7 +229,10 @@ section{max-width:var(--container);margin:0 auto;padding:54px 20px}
 .contact-form input,.contact-form textarea{width:100%;padding:12px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.04);color:var(--txt)}
 .contact-form input:focus,.contact-form textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(34,211,238,.18)}
 .form-actions{display:flex;justify-content:flex-end}
-.form-feedback{margin:0;color:var(--ok);text-align:right}
+.form-feedback{margin:0;color:var(--muted);text-align:right}
+.form-feedback.pending{color:var(--muted)}
+.form-feedback.success{color:var(--ok)}
+.form-feedback.error{color:var(--danger)}
 
 /* Ajustes de layout para #contacto */
 #contacto{padding-top:36px}
@@ -273,7 +277,7 @@ footer{border-top:none;margin-top:40px}
   .menu{display:none}
   .burger{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:12px}
   .grid.cols-3,.grid.cols-2{grid-template-columns:1fr}
-  .hero h2{font-size:34px}
+  .hero h2{font-size:34px;text-align:left;text-align-last:left;text-justify:auto}
 }
 
 /* --- Mejora experiencia mÃ³vil: menÃº mÃ¡s organizado --- */

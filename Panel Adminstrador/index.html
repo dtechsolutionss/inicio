@@ -191,6 +191,12 @@
                   <button id="btn-edit-job" class="btn btn-ghost small">
                     <i data-lucide="pencil"></i><span>Editar</span>
                   </button>
+                  <button id="btn-archive-job" class="btn btn-ghost small" style="display:none;">
+                    <i data-lucide="archive"></i><span>Archivar</span>
+                  </button>
+                  <button id="btn-unarchive-job" class="btn btn-ghost small" style="display:none;">
+                    <i data-lucide="archive-restore"></i><span>Desarchivar</span>
+                  </button>
                   <button id="btn-refresh-kanban" class="btn btn-ghost small" title="Actualizar">
                     <i data-lucide="refresh-ccw"></i>
                   </button>
@@ -357,6 +363,34 @@
             <div id="jobs-hint" class="muted"></div>
           </div>
 
+          <div class="card completed-card">
+            <div class="card-header">
+              <h3><i data-lucide="badge-check"></i> Trabajos completados</h3>
+              <button id="btn-refresh-completed-jobs" class="btn btn-ghost small">
+                <i data-lucide="refresh-ccw"></i><span>Actualizar</span>
+              </button>
+            </div>
+            <div class="table-responsive">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Título</th>
+                    <th>Cliente</th>
+                    <th>Categoría</th>
+                    <th>Estado</th>
+                    <th>Presupuesto</th>
+                    <th>Costo real</th>
+                    <th>Horas (est./real)</th>
+                    <th>Completado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="jobs-completed-tbody"></tbody>
+              </table>
+            </div>
+            <div id="jobs-completed-hint" class="muted"></div>
+          </div>
+
           <div class="card archived-card">
             <div class="card-header">
               <h3><i data-lucide="archive"></i> Trabajos archivados</h3>
@@ -375,6 +409,7 @@
                     <th>Costo real</th>
                     <th>Horas reales</th>
                     <th>Archivado</th>
+                    <th>Acciones</th>
                   </tr>
                 </thead>
                 <tbody id="jobs-archived-tbody"></tbody>

@@ -32,6 +32,8 @@ const $grid = document.getElementById("jobs-grid");
 const $chips = document.querySelectorAll("#chip-categories .chip");
 const $search = document.getElementById("search-input");
 const $navItems = document.querySelectorAll(".nav-item");
+const $btnArchiveJobAction = document.getElementById('btn-archive-job');
+const $btnUnarchiveJobAction = document.getElementById('btn-unarchive-job');
 
 const CATEGORY_LABELS = {
   web: "Páginas web",
@@ -51,12 +53,48 @@ const DEFAULT_ROLE = "Tecnico";
 const ROLE_PRIORITY = { CEO:0, Administrador:1 };
 const BOGOTA_TZ = 'America/Bogota';
 const copFormatter = new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 });
+const ARCHIVED_STATUS = 'archived';
+const COMPLETED_STATUS_DB_VALUES = ['done'];
+const COMPLETED_STATUS_DB_SET = new Set(COMPLETED_STATUS_DB_VALUES);
+const COMPLETED_STATUS_DISPLAY_SET = new Set([...COMPLETED_STATUS_DB_VALUES, 'completed']);
+
+function buildInFilterString(values = []){
+  if(!values.length) return '()';
+  const unique = [...new Set(values.filter(Boolean))];
+  return `(${unique.map(v=>`"${v}"`).join(',')})`;
+}
+
+function resolveJobCompletionDate(job){
+  if(!job) return null;
+  return job.completed_at || job.updated_at || job.due_at || job.created_at || null;
+}
+
+const JOB_STATUS_EXCLUDE_ACTIVE = buildInFilterString([ARCHIVED_STATUS, ...COMPLETED_STATUS_DB_VALUES]);
 
 let canManageUsers = false;
 let supportsBlocking = false;
+let currentJobStatus = null;
 
 function isManager(role){
   return MANAGER_ROLES.has(role);
+}
+
+function updateJobActionButtons(status){
+  const nextStatus = status ?? currentJobStatus ?? null;
+  currentJobStatus = nextStatus || null;
+  const hasSelection = !!currentJob;
+  if($btnArchiveJobAction){
+    const shouldShowArchive = hasSelection && nextStatus && nextStatus !== ARCHIVED_STATUS;
+    $btnArchiveJobAction.style.display = shouldShowArchive ? '' : 'none';
+  }
+  if($btnUnarchiveJobAction){
+    const shouldShowUnarchive = hasSelection && nextStatus === ARCHIVED_STATUS;
+    $btnUnarchiveJobAction.style.display = shouldShowUnarchive ? '' : 'none';
+  }
+  if(!hasSelection){
+    if($btnArchiveJobAction) $btnArchiveJobAction.style.display = 'none';
+    if($btnUnarchiveJobAction) $btnUnarchiveJobAction.style.display = 'none';
+  }
 }
 
 function formatBogotaParts(value){
@@ -90,9 +128,8 @@ function formatDateTimeBogota(value, includeTime = true){
 }
 
 function formatCurrencyCOP(value){
-  if(value === null || value === undefined || value === '') return '—';
-  const num = Number(value);
-  if(Number.isNaN(num)) return '—';
+  const num = toNullableNumber(value);
+  if(num === null) return '—';
   return copFormatter.format(num);
 }
 
@@ -108,6 +145,8 @@ function parseLocalizedNumber(str){
   if(typeof str !== 'string') return null;
   let cleaned = cleanNumberInputString(str);
   if(!cleaned) return null;
+  const negative = cleaned.startsWith('-');
+  if(negative) cleaned = cleaned.slice(1);
   const hasComma = cleaned.includes(',');
   const hasDot = cleaned.includes('.');
   if(hasComma && hasDot){
@@ -118,7 +157,8 @@ function parseLocalizedNumber(str){
     }
   }else if(hasComma){
     cleaned = cleaned.replace(/,/g, '.');
-  }else if(hasDot){
+  }
+  if(cleaned.includes('.')){
     const firstDot = cleaned.indexOf('.');
     const secondDot = cleaned.indexOf('.', firstDot + 1);
     if(secondDot !== -1){
@@ -130,6 +170,8 @@ function parseLocalizedNumber(str){
       }
     }
   }
+  cleaned = cleaned.replace(/,/g, '');
+  if(negative) cleaned = `-${cleaned}`;
   const num = Number(cleaned);
   return Number.isNaN(num) ? null : num;
 }
@@ -141,19 +183,17 @@ function formatMoneyInputValue(value){
 }
 
 function formatHoursValue(value){
-  if(value === null || value === undefined || value === '') return '—';
-  const num = Number(value);
-  if(Number.isNaN(num)) return '—';
+  const num = toNullableNumber(value);
+  if(num === null) return '—';
   return `${num.toLocaleString('es-CO', { minimumFractionDigits:0, maximumFractionDigits:2 })} h`;
 }
 
 function buildDeltaChip(current, reference, positiveIsGood = false){
-  if(current === null || current === undefined || current === '' || reference === null || reference === undefined || reference === ''){
+  const curr = toNullableNumber(current);
+  const ref = toNullableNumber(reference);
+  if(curr === null || ref === null){
     return '<span class="delta-chip delta-neutral">Sin datos</span>';
   }
-  const curr = Number(current);
-  const ref = Number(reference);
-  if(Number.isNaN(curr) || Number.isNaN(ref)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
   const delta = curr - ref;
   if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">En presupuesto</span>';
   const favorable = positiveIsGood ? delta >= 0 : delta <= 0;
@@ -164,12 +204,11 @@ function buildDeltaChip(current, reference, positiveIsGood = false){
 }
 
 function buildHoursDelta(real, estimated){
-  if(real === null || real === undefined || real === '' || estimated === null || estimated === undefined || estimated === ''){
+  const r = toNullableNumber(real);
+  const e = toNullableNumber(estimated);
+  if(r === null || e === null){
     return '<span class="delta-chip delta-neutral">Sin datos</span>';
   }
-  const r = Number(real);
-  const e = Number(estimated);
-  if(Number.isNaN(r) || Number.isNaN(e)) return '<span class="delta-chip delta-neutral">Sin datos</span>';
   const delta = r - e;
   if(Math.abs(delta) < 0.01) return '<span class="delta-chip delta-neutral">Dentro del plan</span>';
   const favorable = delta <= 0;
@@ -302,7 +341,7 @@ function showView(name){
   $navItems.forEach(n=> n.classList.toggle('active', n.dataset.view===name));
   lucide.createIcons();
   if(name==='clients') loadClientsList();
-  if(name==='jobs'){ loadJobsTable(); loadArchivedJobsTable(); }
+  if(name==='jobs'){ loadJobsTable(); loadCompletedJobsTable(); loadArchivedJobsTable(); }
   if(name==='users') loadUsersList();
 }
 $navItems.forEach(n=> n.onclick = ()=> showView(n.dataset.view));
@@ -560,7 +599,7 @@ async function getMe(){
 async function updateStats(){
   const [{ count: cClients }, { count: cJobs }] = await Promise.all([
     sb.from("clients").select("*", { count:"exact", head:true }),
-    sb.from("jobs").select("*", { count:"exact", head:true }).neq("status","archived"),
+    sb.from("jobs").select("*", { count:"exact", head:true }).not('status','in', JOB_STATUS_EXCLUDE_ACTIVE),
   ]);
   document.getElementById("stat-clients").textContent = cClients ?? 0;
   document.getElementById("stat-jobs").textContent    = cJobs ?? 0;
@@ -1033,17 +1072,22 @@ async function uploadTaskAttachments(taskId, files = []){
 function catPill(cat){
   return catLabel(cat);
 }
+function isCompletedStatus(st){
+  return COMPLETED_STATUS_DISPLAY_SET.has(st);
+}
 function statusColor(st){
-  return st==="done" ? "border-color:#16a34a" : st==="on_hold" ? "border-color:#eab308" :
+  if(isCompletedStatus(st)) return "border-color:#16a34a";
+  return st==="on_hold" ? "border-color:#eab308" :
          st==="in_progress" ? "border-color:#38bdf8" : "border-color:#1f2937";
 }
 function statusLabel(st){
-  return st==="done" ? "Completado" : st==="on_hold" ? "Pausado" : st==="in_progress" ? "En progreso" : st==="new" ? "Nuevo" : st;
+  if(isCompletedStatus(st)) return "Completado";
+  return st==="on_hold" ? "Pausado" : st==="in_progress" ? "En progreso" : st==="new" ? "Nuevo" : st;
 }
 
 async function loadJobs(){
   const requested = filter.cat;
-  let q = sb.from("jobs_view").select("*").neq("status","archived");
+  let q = sb.from("jobs_view").select("*").not('status','in', JOB_STATUS_EXCLUDE_ACTIVE);
   if(requested!=="all") q = q.eq("category", requested);
   if(filter.q) q = q.ilike("search_text", `%${filter.q}%`);
   const { data, error } = await q.order("created_at",{ ascending:false });
@@ -1054,14 +1098,35 @@ async function loadJobs(){
     return j.category === requested;
   });
 
+  const jobIds = rows.map(j=> j.id).filter(Boolean);
+  let jobDetailsMap = {};
+  if(jobIds.length){
+    try{
+      const { data: jobDetails } = await sb
+        .from('jobs')
+        .select('id,presupuesto,costo_real,horas_estimadas,horas_reales')
+        .in('id', jobIds);
+      (jobDetails || []).forEach(job=>{
+        if(job && job.id) jobDetailsMap[job.id] = job;
+      });
+    }catch(err){
+      console.error('No se pudieron cargar los detalles de presupuesto de los proyectos', err);
+    }
+  }
+
   $grid.innerHTML = rows.map(j=>{
-    const budget = formatCurrencyCOP(j.presupuesto);
-    const actual = formatCurrencyCOP(j.costo_real);
-    const hoursEst = formatHoursValue(j.horas_estimadas);
-    const hoursReal = formatHoursValue(j.horas_reales);
+    const detail = jobDetailsMap[j.id] || {};
+    const presupuesto = detail.presupuesto ?? j.presupuesto;
+    const costoReal = detail.costo_real ?? j.costo_real;
+    const horasEst = detail.horas_estimadas ?? j.horas_estimadas;
+    const horasReal = detail.horas_reales ?? j.horas_reales;
+    const budget = formatCurrencyCOP(presupuesto);
+    const actual = formatCurrencyCOP(costoReal);
+    const hoursEstDisplay = formatHoursValue(horasEst);
+    const hoursRealDisplay = formatHoursValue(horasReal);
     const eta = j.due_at ? `Entrega ${formatDateTimeBogota(j.due_at)}` : '';
-    const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
-    const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+    const deltaBudget = buildDeltaChip(costoReal, presupuesto);
+    const deltaHours = buildHoursDelta(horasReal, horasEst);
     return `
       <article class="job" data-id="${j.id}" style="${statusColor(j.status)}">
         <div class="row">
@@ -1077,7 +1142,7 @@ async function loadJobs(){
         <div class="job-finance">
           <div class="meta-row"><span>Presupuesto</span><strong>${budget}</strong></div>
           <div class="meta-row"><span>Costo real</span><span>${actual}</span>${deltaBudget}</div>
-          <div class="meta-row"><span>Horas</span><span class="hours-chip">Real ${hoursReal} · Est. ${hoursEst}</span>${deltaHours}</div>
+          <div class="meta-row"><span>Horas</span><span class="hours-chip">Real ${hoursRealDisplay} · Est. ${hoursEstDisplay}</span>${deltaHours}</div>
         </div>
       </article>
     `;
@@ -1087,7 +1152,13 @@ async function loadJobs(){
     el.onclick = async ()=>{
       currentJob = el.dataset.id;
       const job = (data||[]).find(x=>x.id===currentJob);
-      if(job) document.getElementById("kanban-title").textContent = job.title;
+      if(job){
+        document.getElementById("kanban-title").textContent = job.title;
+        currentJobStatus = job.status || null;
+      }else{
+        currentJobStatus = null;
+      }
+      updateJobActionButtons(currentJobStatus);
       document.querySelectorAll('.job').forEach(n=> n.classList.remove('selected'));
       el.classList.add('selected');
       await loadKanban();
@@ -1097,6 +1168,14 @@ async function loadJobs(){
   if(currentJob){
     const sel = document.querySelector(`.job[data-id="${currentJob}"]`);
     if(sel) sel.classList.add('selected');
+    const job = (data||[]).find(x=>x.id===currentJob);
+    if(job){
+      currentJobStatus = job.status || null;
+    }
+    updateJobActionButtons(currentJobStatus);
+  }else{
+    currentJobStatus = null;
+    updateJobActionButtons(null);
   }
 }
 
@@ -1338,6 +1417,20 @@ function enhanceUI(){
   const modalEditJob = document.getElementById('modal-edit-job');
   const btnEditJob = document.getElementById('btn-edit-job');
   const btnSaveEditJob = document.getElementById('btn-save-edit-job');
+  const btnArchiveJob = $btnArchiveJobAction;
+  const btnUnarchiveJob = $btnUnarchiveJobAction;
+  if(btnArchiveJob){
+    btnArchiveJob.onclick = async ()=>{
+      if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
+      await archiveJob(currentJob);
+    };
+  }
+  if(btnUnarchiveJob){
+    btnUnarchiveJob.onclick = async ()=>{
+      if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
+      await unarchiveJob(currentJob);
+    };
+  }
   if(btnEditJob && modalEditJob){
     btnEditJob.onclick = async ()=>{
       if(!currentJob){ toast('Selecciona un trabajo','error'); return; }
@@ -1367,9 +1460,15 @@ function enhanceUI(){
       if(error){ toast(error.message,'error'); return; }
       toast('Trabajo actualizado','ok');
       closeDialog(document.getElementById('modal-edit-job'));
+      if(currentJob === id){
+        currentJobStatus = payload.status || currentJobStatus;
+        updateJobActionButtons(currentJobStatus);
+      }
       await loadJobs(); await loadKanban(); await updateStats(); await loadJobProgressChart();
     };
   }
+
+  updateJobActionButtons(currentJobStatus);
 }
 
 // Cargar trabajos en el select del modal de tarea
@@ -1803,7 +1902,7 @@ async function loadJobsTable(){
   const { data, error } = await sb
     .from("jobs_view")
     .select("*")
-    .neq("status","archived")
+    .not('status','in', JOB_STATUS_EXCLUDE_ACTIVE)
     .order("created_at", { ascending:false });
   if(error){
     tbody.innerHTML = '';
@@ -1816,20 +1915,38 @@ async function loadJobsTable(){
     if(!q) return true;
     return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
   });
+  const jobIds = filtered.map(j=> j.id).filter(Boolean);
+  const jobDetailsMap = {};
+  if(jobIds.length){
+    try{
+      const { data: details } = await sb
+        .from('jobs')
+        .select('id,presupuesto,costo_real,horas_estimadas,horas_reales')
+        .in('id', jobIds);
+      (details || []).forEach(job=>{ if(job && job.id) jobDetailsMap[job.id] = job; });
+    }catch(fetchError){
+      console.error('No se pudieron cargar los detalles financieros de los trabajos activos', fetchError);
+    }
+  }
   const rows = filtered.map(j=>{
-    const statusLabel = ({ done:"Completado", on_hold:"Pausado", in_progress:"En progreso" })[j.status] || j.status;
+    const detail = jobDetailsMap[j.id] || {};
+    const presupuesto = detail.presupuesto ?? j.presupuesto;
+    const costoReal = detail.costo_real ?? j.costo_real;
+    const horasEst = detail.horas_estimadas ?? j.horas_estimadas;
+    const horasReal = detail.horas_reales ?? j.horas_reales;
+    const displayStatus = statusLabel(j.status);
     const eta = j.due_at ? formatDateTimeBogota(j.due_at) : '';
-    const budget = formatCurrencyCOP(j.presupuesto);
-    const actual = formatCurrencyCOP(j.costo_real);
-    const hoursLabel = `Est. ${formatHoursValue(j.horas_estimadas)} · Real ${formatHoursValue(j.horas_reales)}`;
-    const deltaBudget = buildDeltaChip(j.costo_real, j.presupuesto);
-    const deltaHours = buildHoursDelta(j.horas_reales, j.horas_estimadas);
+    const budget = formatCurrencyCOP(presupuesto);
+    const actual = formatCurrencyCOP(costoReal);
+    const hoursLabel = `Est. ${formatHoursValue(horasEst)} · Real ${formatHoursValue(horasReal)}`;
+    const deltaBudget = buildDeltaChip(costoReal, presupuesto);
+    const deltaHours = buildHoursDelta(horasReal, horasEst);
     return `
       <tr>
         <td>${j.title}</td>
         <td>${j.client_name||""}</td>
         <td>${catPill(j.category)}</td>
-        <td><span class="pill">${statusLabel}</span></td>
+        <td><span class="pill">${displayStatus}</span></td>
         <td class="progress-cell"><div class="progress"><span style="width:${j.progress||0}%"></span></div></td>
         <td>${budget}</td>
         <td>${actual}<br>${deltaBudget}</td>
@@ -1845,7 +1962,88 @@ async function loadJobsTable(){
   }).join("");
   tbody.innerHTML = rows;
   if(hint){
-    hint.textContent = filtered.length ? 'Trabajos activos ordenados por fecha.' : 'Sin trabajos activos para mostrar.';
+    hint.textContent = filtered.length ? 'Trabajos activos sin finalizar ni archivar.' : 'Sin trabajos activos para mostrar.';
+  }
+  lucide.createIcons();
+  attachJobsTableHandlers();
+}
+
+async function loadCompletedJobsTable(){
+  const tbody = document.getElementById('jobs-completed-tbody');
+  const hint = document.getElementById('jobs-completed-hint');
+  if(!tbody) return;
+  if(hint) hint.textContent = 'Cargando completados…';
+  const { data, error } = await sb
+    .from('jobs_view')
+    .select('*')
+    .in('status', Array.from(COMPLETED_STATUS_DB_SET));
+  if(error){
+    tbody.innerHTML = '';
+    if(hint) hint.textContent = error.message || 'No fue posible cargar los trabajos completados.';
+    toast(error.message || 'No fue posible cargar los trabajos completados.', 'error');
+    return;
+  }
+  const rowsData = (data || []).slice().sort((a,b)=>{
+    const aKey = resolveJobCompletionDate(a);
+    const bKey = resolveJobCompletionDate(b);
+    if(!aKey && !bKey) return 0;
+    if(!aKey) return 1;
+    if(!bKey) return -1;
+    return new Date(bKey).getTime() - new Date(aKey).getTime();
+  });
+  const q = (document.getElementById('jobs-search')?.value || '').toLowerCase();
+  const filtered = rowsData.filter(j=>{
+    if(!q) return true;
+    return [j.title, j.client_name, j.category, j.status].join(' ').toLowerCase().includes(q);
+  });
+  const jobIds = filtered.map(j=> j.id).filter(Boolean);
+  const jobDetailsMap = {};
+  if(jobIds.length){
+    try{
+      const { data: details } = await sb
+        .from('jobs')
+        .select('id,presupuesto,costo_real,horas_estimadas,horas_reales')
+        .in('id', jobIds);
+      (details || []).forEach(job=>{ if(job && job.id) jobDetailsMap[job.id] = job; });
+    }catch(fetchError){
+      console.error('No se pudieron cargar los detalles financieros de los trabajos completados', fetchError);
+    }
+  }
+  const rows = filtered.map(j=>{
+    const detail = jobDetailsMap[j.id] || {};
+    const presupuesto = detail.presupuesto ?? j.presupuesto;
+    const costoReal = detail.costo_real ?? j.costo_real;
+    const horasEst = detail.horas_estimadas ?? j.horas_estimadas;
+    const horasReal = detail.horas_reales ?? j.horas_reales;
+    const completedAt = resolveJobCompletionDate(j);
+    const when = completedAt ? formatDateTimeBogota(completedAt) : '';
+    const budget = formatCurrencyCOP(presupuesto);
+    const actual = formatCurrencyCOP(costoReal);
+    const hoursLabel = `Est. ${formatHoursValue(horasEst)} · Real ${formatHoursValue(horasReal)}`;
+    const deltaBudget = buildDeltaChip(costoReal, presupuesto);
+    const deltaHours = buildHoursDelta(horasReal, horasEst);
+    const displayStatus = statusLabel(j.status);
+    return `
+      <tr>
+        <td>${j.title}</td>
+        <td>${j.client_name||''}</td>
+        <td>${catPill(j.category)}</td>
+        <td><span class="pill">${displayStatus}</span></td>
+        <td>${budget}</td>
+        <td>${actual}<br>${deltaBudget}</td>
+        <td><span class="hours-chip">${hoursLabel}</span><br>${deltaHours}</td>
+        <td>${when}</td>
+        <td>
+          <button class="btn btn-ghost small" title="Abrir" data-open-job="${j.id}"><i data-lucide="external-link"></i></button>
+          <button class="btn btn-ghost small" title="Editar" data-edit-job-row="${j.id}"><i data-lucide="pencil"></i></button>
+          <button class="btn btn-ghost small" title="Archivar" data-archive-job="${j.id}"><i data-lucide="archive"></i></button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  tbody.innerHTML = rows;
+  if(hint){
+    hint.textContent = filtered.length ? 'Trabajos finalizados listos para consulta.' : 'Sin trabajos completados.';
   }
   lucide.createIcons();
   attachJobsTableHandlers();
@@ -1859,7 +2057,7 @@ async function loadArchivedJobsTable(){
   const { data, error } = await sb
     .from('jobs_view')
     .select('*')
-    .eq('status', 'archived')
+    .eq('status', ARCHIVED_STATUS)
     .order('created_at', { ascending:false });
   if(error){
     tbody.innerHTML = '';
@@ -1880,21 +2078,43 @@ async function loadArchivedJobsTable(){
     if(!q) return true;
     return [j.title, j.client_name, j.category].join(' ').toLowerCase().includes(q);
   });
+  const jobIds = filtered.map(j=> j.id).filter(Boolean);
+  const jobDetailsMap = {};
+  if(jobIds.length){
+    try{
+      const { data: details } = await sb
+        .from('jobs')
+        .select('id,presupuesto,costo_real,horas_reales')
+        .in('id', jobIds);
+      (details || []).forEach(job=>{ if(job && job.id) jobDetailsMap[job.id] = job; });
+    }catch(fetchError){
+      console.error('No se pudieron cargar los detalles financieros de los trabajos archivados', fetchError);
+    }
+  }
   const rows = filtered.map(j=>{
     const archivedAt = j.archived_at || j.updated_at || j.created_at;
     const when = archivedAt ? formatDateTimeBogota(archivedAt) : '';
-    const budget = formatCurrencyCOP(j.presupuesto);
-    const actual = formatCurrencyCOP(j.costo_real);
-    const hoursReal = formatHoursValue(j.horas_reales);
+    const detail = jobDetailsMap[j.id] || {};
+    const presupuesto = detail.presupuesto ?? j.presupuesto;
+    const costoReal = detail.costo_real ?? j.costo_real;
+    const horasRealValue = detail.horas_reales ?? j.horas_reales;
+    const budget = formatCurrencyCOP(presupuesto);
+    const actual = formatCurrencyCOP(costoReal);
+    const deltaBudget = buildDeltaChip(costoReal, presupuesto);
+    const hoursReal = formatHoursValue(horasRealValue);
     return `
       <tr>
         <td>${j.title}</td>
         <td>${j.client_name||''}</td>
         <td>${catPill(j.category)}</td>
         <td>${budget}</td>
-        <td>${actual}</td>
+        <td>${actual}<br>${deltaBudget}</td>
         <td>${hoursReal}</td>
         <td>${when}</td>
+        <td>
+          <button class="btn btn-ghost small" title="Abrir" data-open-job="${j.id}"><i data-lucide="external-link"></i></button>
+          <button class="btn btn-ghost small" title="Desarchivar" data-unarchive-job="${j.id}"><i data-lucide="archive-restore"></i></button>
+        </td>
       </tr>
     `;
   }).join('');
@@ -1902,6 +2122,8 @@ async function loadArchivedJobsTable(){
   if(hint){
     hint.textContent = filtered.length ? 'Historial de trabajos archivados.' : 'Sin trabajos archivados.';
   }
+  lucide.createIcons();
+  attachJobsTableHandlers();
 }
 
 // ---------- Empleados (solo admin ve todos) ----------
@@ -2053,7 +2275,7 @@ try{ initTaskGlobalControls(); }catch(e){}
 const $clientsSearch = document.getElementById('clients-search');
 if($clientsSearch) $clientsSearch.oninput = ()=> loadClientsList();
 const $jobsSearch = document.getElementById('jobs-search');
-if($jobsSearch) $jobsSearch.oninput = ()=>{ loadJobsTable(); loadArchivedJobsTable(); };
+if($jobsSearch) $jobsSearch.oninput = ()=>{ loadJobsTable(); loadCompletedJobsTable(); loadArchivedJobsTable(); };
 
 // Handlers de acciones en tablas
 function attachClientsTableHandlers(){
@@ -2187,13 +2409,18 @@ function attachJobsTableHandlers(){
     currentJob = b.dataset.openJob; showView('dashboard');
     const titleEl = document.getElementById('kanban-title');
     try{
-      const { data } = await sb.from('jobs').select('title').eq('id', currentJob).single();
+      const { data } = await sb.from('jobs').select('title,status').eq('id', currentJob).single();
       if(titleEl && data) titleEl.textContent = data.title;
-    }catch(e){}
+      currentJobStatus = data?.status || null;
+    }catch(e){
+      currentJobStatus = null;
+    }
+    updateJobActionButtons(currentJobStatus);
     await loadKanban(); await loadJobProgressChart();
   });
   document.querySelectorAll('[data-edit-job-row]').forEach(b=> b.onclick = ()=> openEditJobModal(b.dataset.editJobRow));
   document.querySelectorAll('[data-archive-job]').forEach(b=> b.onclick = ()=> archiveJob(b.dataset.archiveJob));
+  document.querySelectorAll('[data-unarchive-job]').forEach(b=> b.onclick = ()=> unarchiveJob(b.dataset.unarchiveJob));
 }
 async function openEditJobModal(id){
   const { data, error } = await sb.from('jobs').select('*').eq('id', id).single();
@@ -2222,17 +2449,35 @@ async function openEditJobModal(id){
 }
 async function archiveJob(id){
   if(!confirm('¿Archivar trabajo?')) return;
-  const { error } = await sb.from('jobs').update({ status:'archived' }).eq('id', id);
+  const { error } = await sb.from('jobs').update({ status: ARCHIVED_STATUS }).eq('id', id);
   if(error){ toast(error.message,'error'); return; }
   toast('Trabajo archivado','ok');
-  await loadJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
+  if(currentJob === id){
+    currentJobStatus = ARCHIVED_STATUS;
+    updateJobActionButtons(currentJobStatus);
+  }
+  await loadJobsTable(); await loadCompletedJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
+}
+
+async function unarchiveJob(id){
+  if(!confirm('¿Desarchivar trabajo?')) return;
+  const { error } = await sb.from('jobs').update({ status:'in_progress' }).eq('id', id);
+  if(error){ toast(error.message,'error'); return; }
+  toast('Trabajo desarchivado','ok');
+  if(currentJob === id){
+    currentJobStatus = 'in_progress';
+    updateJobActionButtons(currentJobStatus);
+  }
+  await loadJobsTable(); await loadCompletedJobsTable(); await loadArchivedJobsTable(); await loadJobs(); await updateStats();
 }
 
 // Botones de refresco
 const $btnRefClients = document.getElementById('btn-refresh-clients');
 if($btnRefClients) $btnRefClients.onclick = ()=> loadClientsList();
 const $btnRefJobs = document.getElementById('btn-refresh-jobs');
-if($btnRefJobs) $btnRefJobs.onclick = ()=>{ loadJobsTable(); loadArchivedJobsTable(); };
+if($btnRefJobs) $btnRefJobs.onclick = ()=>{ loadJobsTable(); loadCompletedJobsTable(); loadArchivedJobsTable(); };
+const $btnRefCompletedJobs = document.getElementById('btn-refresh-completed-jobs');
+if($btnRefCompletedJobs) $btnRefCompletedJobs.onclick = ()=> loadCompletedJobsTable();
 const $btnRefArchivedJobs = document.getElementById('btn-refresh-archived-jobs');
 if($btnRefArchivedJobs) $btnRefArchivedJobs.onclick = ()=> loadArchivedJobsTable();
 const $btnRefKanban = document.getElementById('btn-refresh-kanban');
